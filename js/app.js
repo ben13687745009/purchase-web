@@ -400,17 +400,10 @@
             rows[i].flags.review = true;
             rows[i].flags.note = (rows[i].flags.note ? rows[i].flags.note + '；' : '') + `识别置信度低(${it.conf})`;
           }
-          // ★ 原始三值自洽性检查（抓手机端列错位：OCR 把别行的数字填到本行）
-          //   在 reconcile 之后用原始 it 值判断——即使 reconcile 已用金额反推修正了 qty/price，
-          //   如果原始偏差极大（如 1350→135），仍需标红让用户知道模型读错了金额。
-          //   分/元双感知：金额列可能是「分」（如 414 分），此时应比对 数量×单价×100。
+          // ★ 原始三值自洽性检查：金额 = 数量 × 单价（不再区分分/元，直接用识别原值比对）
           if (U.ok(it.qty) && U.ok(it.price) && U.ok(it.amount)) {
-            const calc = it.qty * it.price;          // 元
-            const calcFen = calc * 100;              // 分
-            const dev = Math.min(
-              Math.abs(calc - it.amount) / Math.max(it.amount, 1),
-              Math.abs(calcFen - it.amount) / Math.max(it.amount, 1)
-            );
+            const calc = U.r4(it.qty * it.price);
+            const dev = Math.abs(calc - it.amount) / Math.max(it.amount, 1);
             if (dev > 0.5) {
               rows[i].flags.review = true;
               rows[i].flags.note = (rows[i].flags.note ? rows[i].flags.note + '；' : '') +
@@ -741,23 +734,10 @@
       else if (key === 'cat') row.cat = val;
       else if (key === 'name') { row.name = String(val).trim(); row.rawName = row.name; }
       else if (key === 'amount') {
-        // 金额编辑：表格直接显示用户填入的原始数字（如 414），不做 ÷100。
-        // 内部记账金额按「分」检测换算成元（仅导出/合计用）：若填入值≥100 且 ÷单价≈100 整数倍，判定为分。
+        // 金额编辑：表格直接显示用户填入的原始数字，后端不再做分/元换算。
         const v = U.toNum(val);
         row.rawAmount = v;
-        const pr = U.toNum(row.price);
-        if (U.ok(v) && U.ok(pr) && pr > 0 && pr < 100) {
-          const ratio = v / pr;
-          if (ratio >= 50) {
-            const candQ = Math.round(ratio / 100);
-            const expFen = candQ * pr * 100;
-            row.amount = (candQ >= 1 && candQ <= 50 && Math.abs(v - expFen) / Math.max(expFen, 1) < 0.02) ? U.r2(v / 100) : v;
-          } else {
-            row.amount = v;
-          }
-        } else {
-          row.amount = v;
-        }
+        row.amount = v;
       } else row[key] = U.toNum(val);
 
       const f = row.flags || (row.flags = { derived: [], note: '' });

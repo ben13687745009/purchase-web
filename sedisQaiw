@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>采购单识别汇总台</title>
+<link rel="stylesheet" href="css/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📋</text></svg>">
+<script>
+window.__runtimeErrors = [];
+window.__scriptErrors = [];
+window.onerror = function(msg, url, line, col, err) {
+  window.__runtimeErrors.push(String(msg) + ' @ ' + (url || '?') + ':' + line + ':' + col);
+  return false;
+};
+window.addEventListener('error', function(e) {
+  if (e.target && e.target.tagName === 'SCRIPT') {
+    window.__scriptErrors.push('script error: ' + (e.target.src || 'inline'));
+  }
+}, true);
+</script>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand">
+      <h1>采购单汇总台</h1>
+      <p>OCR 识别 · 自动汇总 · 导出</p>
+    </div>
+    <nav class="nav" id="nav">
+      <button data-v="work" class="on"><span class="ic">📷</span><span>识别工作台</span></button>
+      <button data-v="table"><span class="ic">📊</span><span>数据核对</span><span class="badge" id="bg-rows">0</span></button>
+      <button data-v="db"><span class="ic">🗄️</span><span>商品数据库</span><span class="badge" id="bg-items">0</span></button>
+      <button data-v="out"><span class="ic">📤</span><span>汇总导出</span></button>
+      <button data-v="set"><span class="ic">⚙️</span><span>设置</span></button>
+    </nav>
+    <div class="side-foot">数据保存在本浏览器<br>可在设置页备份/迁移</div>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <h2 id="vtitle">识别工作台</h2>
+      <div class="sp"></div>
+      <div class="ctx">
+        <span>账套</span>
+        <select id="shopSel" title="店铺"></select>
+        <select id="ymSel" title="月份"></select>
+        <button class="btn sm" id="newBook" title="新建账套">＋</button>
+      </div>
+    </div>
+
+    <!-- ============ 工作台 ============ -->
+    <section class="view" id="v-work">
+      <div class="card">
+        <h3>① 上传采购单照片<div class="sp"></div><small>支持多选 / 拖拽 / 手机拍照 · JPG PNG WEBP HEIC</small></h3>
+        <div class="body">
+          <!-- 通道切换 -->
+          <div class="channel-tabs" style="display:flex;gap:0;margin-bottom:12px;border:1px solid var(--line);border-radius:9px;overflow:hidden">
+            <button class="channel-tab active" data-ch="desktop" id="tabDesktop" style="flex:1;padding:8px 0;border:none;background:var(--brand-1);color:#fff;font-size:14px;cursor:pointer">📁 电脑上传（扫描件/截图）</button>
+            <button class="channel-tab" data-ch="mobile" id="tabMobile" style="flex:1;padding:8px 0;border:none;background:var(--bg);color:var(--text);font-size:14px;cursor:pointer;border-left:1px solid var(--line)">📱 手机拍照（直接拍单据）</button>
+          </div>
+          <div class="muted" id="channelHint" style="font-size:12px;margin-bottom:10px">当前：电脑模式 — 适合扫描件、PDF 转图片、微信文件传输助手收到的清晰图片</div>
+
+          <!-- 上传区域（共用，根据通道切换提示） -->
+          <div class="drop" id="dropPhoto">
+            <div class="big" id="dropIcon">📸</div>
+            <div class="t" id="dropText">点击选择，或把照片拖进来</div>
+            <div class="s" id="dropSub">一次可传多张，识别时会自动带上商品库做上下文纠错</div>
+          </div>
+          <input type="file" id="filePhoto" accept="image/*" multiple hidden>
+          <div class="thumbs" id="thumbs"></div>
+
+          <!-- 照片统计：各通道数量 -->
+          <div class="row" id="photoStats" style="margin-top:6px;font-size:12px;color:var(--muted)"></div>
+
+          <div class="prog" id="ocrProg" hidden><i></i></div>
+          <div class="row" style="margin-top:14px;flex-wrap:wrap;gap:10px">
+            <button class="btn primary" id="btnOcr" disabled>开始识别</button>
+            <button class="btn" id="btnClearPhoto" disabled>清空照片</button>
+            <div class="sp"></div>
+            <label style="font-size:13px;color:var(--muted)">本次识别分类：</label>
+            <select id="ocrCat" style="padding:5px 9px;border:1px solid var(--line);border-radius:7px;min-width:150px">
+              <option value="">自动识别（按品名推断）</option>
+            </select>
+            <span class="muted" style="font-size:12px">一次传 20-30 张同类照片时，先选好分类再识别</span>
+            <span class="muted" id="ocrHint">先在「设置」里填好视觉模型 API</span>
+          </div>
+          <div class="log" id="ocrLog" hidden></div>
+        </div>
+      </div>
+
+<div class="card">
+        <h3>③ 上传扫描王 / Excel 采购单<div class="sp"></div><small>手机扫描王导出的 Excel 也能直接汇总</small></h3>
+        <div class="body">
+          <div class="drop" id="dropRaw">
+            <div class="big">📄</div>
+            <div class="t">点击选择，或把 Excel 拖进来</div>
+            <div class="s">支持 .xlsx / .xlsm；自动识别表格、按商品库匹配补全、分类汇总</div>
+          </div>
+          <input type="file" id="fileRaw" accept=".xlsx,.xlsm" multiple hidden>
+          <div class="log" id="rawLog" hidden></div>
+          <div class="row" style="margin-top:12px;align-items:center;flex-wrap:wrap;gap:10px">
+            <button class="btn primary" id="btnRawImport" disabled>导入并识别</button>
+            <div class="sp"></div>
+            <label style="font-size:13px;color:var(--muted)">本次导入分类：</label>
+            <select id="rawCat" style="padding:5px 9px;border:1px solid var(--line);border-radius:7px;min-width:150px">
+              <option value="">自动识别（按品名推断）</option>
+            </select>
+            <span class="muted" style="font-size:12px">一次传多个文件时，先选好分类再导入</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 数据核对 ============ -->
+    <section class="view" id="v-table" hidden>
+      <div class="card">
+        <h3>本账套数据<div class="sp"></div>
+          <button class="btn sm" id="btnRecalc">重新推算</button>
+          <button class="btn sm" id="btnDedup">合并同日同名</button>
+          <button class="btn sm danger" id="btnDelSel" style="display:none">删除选中 <b id="selCount">0</b> 行</button>
+          <button class="btn sm danger" id="btnClearRows">清空</button>
+        </h3>
+        <div class="body">
+          <div class="stats" id="stats"></div>
+          <div class="hr"></div>
+          <div class="row" style="margin-bottom:10px">
+            <div class="catchips" id="catFilter"></div>
+            <div class="sp" style="flex:1"></div>
+            <label class="pill"><input type="checkbox" id="onlyReview" style="margin:0 4px 0 0">只看待核对</label>
+            <input id="searchRow" placeholder="搜索品名…" style="padding:5px 9px;border:1px solid var(--line);border-radius:7px;width:150px">
+          </div>
+        </div>
+        <div class="body tight">
+          <div class="tblwrap">
+            <table class="dt" id="dt">
+              <thead><tr>
+                <th style="width:38px"><input type="checkbox" id="chkAll" title="全选/取消"></th><th style="width:52px">序号</th><th style="width:74px">日期</th>
+                <th style="width:104px">分类</th><th>名称和规格</th>
+                <th style="width:92px">数量</th><th style="width:92px">单价</th>
+                <th style="width:104px">金额</th><th style="width:130px">来源</th><th style="width:56px"></th>
+              </tr></thead>
+              <tbody id="dtBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 商品数据库 ============ -->
+    <section class="view" id="v-db" hidden>
+      <div class="card">
+        <h3>导入历史汇总表<div class="sp"></div><small>作为品名 / 规格 / 历史单价的比对依据</small></h3>
+        <div class="body">
+          <div class="drop" id="dropXlsx">
+            <div class="big">📗</div>
+            <div class="t">拖入已完成的标准采购汇总 Excel</div>
+            <div class="s">自动识别店铺、月份、各分类 sheet，抽取标准品名与历史单价</div>
+          </div>
+          <input type="file" id="fileXlsx" accept=".xlsx,.xlsm" multiple hidden>
+          <div class="log" id="impLog" hidden></div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>商品库<div class="sp"></div>
+          <input id="searchItem" placeholder="搜索…" style="padding:5px 9px;border:1px solid var(--line);border-radius:7px;width:160px">
+          <button class="btn sm" id="btnExportDb">导出JSON</button>
+          <button class="btn sm danger" id="btnClearDb">清空库</button>
+        </h3>
+        <div class="body">
+          <div class="catchips" id="dbCatFilter" style="margin-bottom:12px"></div>
+          <div class="tblwrap" style="max-height:calc(100vh - 420px)">
+            <table class="simple" id="itemTbl">
+              <thead><tr><th>分类</th><th>标准名称 / 规格</th><th class="tr">参考单价</th>
+                <th class="tr">价格区间</th><th class="tc">出现</th><th>出现门店</th><th></th></tr></thead>
+              <tbody id="itemBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 导出 ============ -->
+    <section class="view" id="v-out" hidden>
+      <div class="card">
+        <h3>汇总导出<div class="sp"></div><small>严格套用你的固定表头与格式</small></h3>
+        <div class="body">
+          <div class="grid2">
+            <div class="field">
+              <label>导出范围</label>
+              <select id="expScope">
+                <option value="cur">当前账套（店铺 + 月份）</option>
+                <option value="shop">该店铺全部月份（每月一个文件）</option>
+                <option value="all">全部账套（每个账套一个文件）</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>文件名格式</label>
+              <input id="expName" value="伯友茶记（{shop}）{m}月">
+              <div class="hint">可用变量：{shop} 店铺 · {m} 月 · {ym} 年月编码</div>
+            </div>
+          </div>
+          <div class="row">
+            <label class="pill"><input type="checkbox" id="optDaily" checked style="margin:0 5px 0 0">附「每日汇总」sheet</label>
+            <label class="pill"><input type="checkbox" id="optReview" checked style="margin:0 5px 0 0">附「待核对」sheet</label>
+            <label class="pill"><input type="checkbox" id="optMerge" checked style="margin:0 5px 0 0">同日期合并单元格</label>
+          </div>
+          <div class="hr"></div>
+          <div class="row">
+            <button class="btn primary" id="btnExport">生成并下载 Excel</button>
+            <span class="muted" id="expHint"></span>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>导出预览<div class="sp"></div><small>月度总帐</small></h3>
+        <div class="body" id="expPreview"><div class="empty">暂无数据</div></div>
+      </div>
+    </section>
+
+    <!-- ============ 设置 ============ -->
+    <section class="view" id="v-set" hidden>
+      <div class="card">
+        <h3>视觉模型 API<div class="sp"></div><small>OpenAI 兼容格式，密钥只存在本浏览器</small></h3>
+        <div class="body">
+          <div class="field">
+            <label>服务商预设</label>
+            <select id="apiPreset">
+              <option value="">— 自定义 —</option>
+              <option value="qwen">阿里云百炼 / 通义千问 VL</option>
+              <option value="zhipu">智谱 GLM-4V</option>
+              <option value="doubao">火山方舟 / 豆包 Vision</option>
+              <option value="moonshot">Moonshot Kimi Vision</option>
+              <option value="stepfun">阶跃星辰 Step</option>
+              <option value="siliconflow">硅基流动 SiliconFlow</option>
+              <option value="openai">OpenAI</option>
+              <option value="openrouter">OpenRouter</option>
+              <option value="ollama">本地 Ollama</option>
+            </select>
+          </div>
+          <div class="grid2">
+            <div class="field">
+              <label>接口地址 Base URL</label>
+              <input id="apiBase" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1">
+              <div class="hint">填到 /v1 为止即可，程序会补 /chat/completions</div>
+            </div>
+            <div class="field">
+            <label>模型名 Model</label>
+            <input id="apiModel" placeholder="填写你账号已开通的模型名">
+            </div>
+          </div>
+          <div class="field">
+            <label>手机端模型 Model for mobile</label>
+            <input id="apiMobileModel" placeholder="可选，如 qwen-vl-plus">
+            <div class="hint">留空则与电脑端模型相同；也可填写你有权限的其他模型，由你自由选择</div>
+          </div>
+          <div class="field">
+            <label>API Key</label>
+            <input id="apiKey" type="password" placeholder="sk-...">
+          </div>
+          <div class="grid3">
+            <div class="field">
+              <label>并发数</label>
+              <input id="apiConc" type="number" min="1" max="12" value="6">
+            </div>
+            <div class="field">
+              <label>图片压缩宽度(px)</label>
+              <input id="apiMaxW" type="number" min="800" max="4000" value="1800">
+              <div class="hint">太小会看不清手写</div>
+            </div>
+            <div class="field">
+              <label>代理前缀（可选）</label>
+              <input id="apiProxy" placeholder="留空">
+              <div class="hint">浏览器报跨域时才需要</div>
+            </div>
+          </div>
+          <div class="row" style="margin-top:8px">
+            <label class="pill" title="开启后，电脑上传的图片也会做锐化、笔画加粗等完整增强；默认关闭，仅做轻量对比度拉伸">
+              <input type="checkbox" id="apiDesktopEnhance" style="margin:0 5px 0 0">电脑端启用完整图像增强（手写极淡/模糊时勾选）
+            </label>
+          </div>
+          <div class="row">
+            <button class="btn" id="btnTestApi">测试连接</button>
+            <button class="btn primary" id="btnSaveApi">保存配置</button>
+            <span class="muted" id="apiMsg"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>分类与匹配规则</h3>
+        <div class="body">
+          <div class="field">
+            <label>分类清单（每行一个，顺序即导出 sheet 顺序）</label>
+            <textarea id="cfgCats" rows="7"></textarea>
+          </div>
+          <div class="field">
+            <label>按「每日汇总」格式导出的分类（序号/日期/商品品种统计/金额）</label>
+            <input id="cfgDaily" placeholder="环绿蔬菜">
+          </div>
+          <div class="grid3">
+            <div class="field">
+              <label>自动纠正阈值</label>
+              <input id="cfgAuto" type="number" step="0.01" min="0.5" max="1" value="0.92">
+            </div>
+            <div class="field">
+              <label>待核对阈值</label>
+              <input id="cfgRev" type="number" step="0.01" min="0.5" max="1" value="0.85">
+            </div>
+            <div class="field">
+              <label>金额校验容差</label>
+              <input id="cfgTol" type="number" step="0.001" min="0" max="0.2" value="0.01">
+            </div>
+          </div>
+          <button class="btn primary" id="btnSaveCfg">保存规则</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>数据备份与迁移</h3>
+        <div class="body">
+          <div class="row">
+            <button class="btn" id="btnBackup">导出全部数据（.json）</button>
+            <button class="btn" id="btnRestore">导入备份</button>
+            <input type="file" id="fileRestore" accept=".json" hidden>
+            <div class="sp" style="flex:1"></div>
+            <button class="btn danger" id="btnWipe">清除全部本地数据</button>
+          </div>
+          <div class="hint muted" style="margin-top:8px">
+            换电脑 / 换浏览器时，用它把商品库和所有账套一起搬走。
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<div class="mask" id="lightbox" hidden><img id="lbImg" alt=""></div>
+
+<div class="mask" id="modal" hidden>
+  <div class="modal">
+    <h3 id="mdTitle">标题</h3>
+    <div class="mbody" id="mdBody"></div>
+    <div class="mfoot" id="mdFoot"></div>
+  </div>
+</div>
+
+<script>window.__scriptErrors = [];</script>
+<script src="vendor/exceljs.min.js?v=2026082420" onerror="window.__scriptErrors.push('load failed: '+this.src)"></script>
+<script src="js/utils.js?v=2026082420" onerror="window.__scriptErrors.push('load failed: '+this.src)"></script>
+<script src="js/store.js?v=2026082420" onerror="window.__scriptErrors.push('load failed: '+this.src)"></script>
+<script src="js/matcher.js?v=2026082420" onerror="window.__scriptErrors.push('load failed: '+this.src)"></script>
+<script src="js/importer.js?v=2026082420" onerror="window.__scriptErrors.push('load failed: '+this.src)"></script>
+<script src="js/ocr.js?v=2026082420" onerror="window.__scriptErrors.push('load failed: '+this.src)"></script>
+<script src="js/exporter.js?v=2026082420" onerror="window.__scriptErrors.push('load failed: '+this.src)"></script>
+<script src="js/app.js?v=2026082420" onerror="window.__scriptErrors.push('load failed: '+this.src)"></script>
+</body>
+</html>

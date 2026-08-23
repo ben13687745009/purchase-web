@@ -212,24 +212,7 @@
       if (hasA) {
         // 有金额+单价 → 以金额为准，用「金额 ÷ 单价」校验并修正数量
         if (U.ok(p)) {
-          // ★ 金额单位「分」检测：送货单金额列常写「分」（如 414 分 = 4.14 元）。
-          // 典型特征：金额 ÷ 单价 ≈ 100 的整数倍（1×100、2×100…），且单价为合理采购价。
-          if (a >= 100 && p > 0 && p < 100) {
-            const fenRatio = a / p;
-            if (fenRatio >= 50) {
-              const candidateQty = Math.round(fenRatio / 100);
-              const expectedFen = candidateQty * p * 100;
-              if (candidateQty >= 1 && candidateQty <= 50 &&
-                  Math.abs(a - expectedFen) / Math.max(expectedFen, 1) < 0.02) {
-                // 金额单位为分：换算成元。这是标准单位换算，不标待核对，也不标金额推算。
-                a = U.r2(a / 100);
-                note = `金额${U.fmt(amount)}为「分」（${candidateQty}×${U.fmt(p)}×100=${U.fmt(expectedFen)}），已换算为元：${U.fmt(a)}`;
-                amount = a;
-                // 不加入 derived，避免 UI 显示「金额推算」
-                if (derived.indexOf('amount') >= 0) derived.splice(derived.indexOf('amount'), 1);
-              }
-            }
-          }
+          // 不再做「分→元」换算：OCR 识别到的金额原值直接保留。
           const calcQ = U.r4(a / p);
           const hasQR = U.ok(q);
           const qOK = isNiceQty(q);
@@ -420,42 +403,21 @@
         row.flags.review = true;
       }
 
-      // 3. 金额 ≥ 100 但无法得到合理数量：提示可能是漏小数点/分单位，后端只标不自动改
-      if (U.ok(rawAmount) && rawAmount >= 100 && U.ok(row.price) && row.price < 100) {
-        const calcQ = rawAmount / row.price;
-        if (!this._isNiceQty(calcQ)) {
-          fixNotes.push(`金额${U.fmt(rawAmount)}与单价${U.fmt(row.price)}无法得到合理数量，疑似漏小数点/分单位，请核对原单金额列`);
+      // ★ 3. 异常标记：金额 ≈ 单价（OCR 把金额列误读成单价列的典型特征）
+      if (U.ok(row.price) && U.ok(row.amount) && row.price > 0 && row.price < 100) {
+        const ratio = row.amount / row.price;
+        if (ratio >= 0.98 && ratio <= 1.02) {
+          fixNotes.push(`金额${U.fmt(row.amount)}≈单价${U.fmt(row.price)}，疑似金额列读成单价列；请核对原单金额列`);
           row.flags.review = true;
         }
       }
 
-      // ★ 4. 异常标记：金额 ≈ 单价（OCR 把金额列误读成单价列的典型特征）
-      // 例如模型错填成 amount=4.85（应为 485 分）。只标待核对，不改金额。
-      // 分感知：若 rawAmount 本就是「分」（≈单价×100），换算后 amount=price 属正常，不误标。
-      if (U.ok(row.price) && U.ok(row.amount) && row.price > 0 && row.price < 100) {
-        const ratio = row.amount / row.price;
-        if (ratio >= 0.98 && ratio <= 1.02) {
-          const rawA = (row.rawAmount != null) ? row.rawAmount : row.amount;
-          const isFen = rawA >= 100 && Math.abs(rawA - row.amount * 100) / Math.max(row.amount, 1) < 0.02;
-          if (!isFen) {
-            fixNotes.push(`金额${U.fmt(row.amount)}≈单价${U.fmt(row.price)}，疑似金额列读成单价列；请核对原单金额列（应为三位整数分）`);
-            row.flags.review = true;
-          }
-        }
-      }
-
-      // ★ 5. 异常标记：金额精确等于 数量×单价（OCR 用自算填充金额列，没读原金额列）
-      // 例如 qty=2, price=3.06, amount=6.12。只标待核对，不改金额。
-      // 分感知：分单据换算后 amount=qty×price 属正常，不误标。
+      // ★ 4. 异常标记：金额精确等于 数量×单价（OCR 用自算填充金额列，没读原金额列）
       if (U.ok(row.qty) && U.ok(row.price) && U.ok(row.amount) && row.qty > 0 && row.price > 0) {
         const calcAmount = U.r2(row.qty * row.price);
         if (Math.abs(row.amount - calcAmount) < 0.005 && row.amount > 0 && row.amount < 100) {
-          const rawA = (row.rawAmount != null) ? row.rawAmount : row.amount;
-          const isFen = rawA >= 100 && Math.abs(rawA - calcAmount * 100) / Math.max(calcAmount, 1) < 0.02;
-          if (!isFen) {
-            fixNotes.push(`金额${U.fmt(row.amount)}=数量×单价，疑似金额列被自算填充；请核对原单金额列（应为三位整数分）`);
-            row.flags.review = true;
-          }
+          fixNotes.push(`金额${U.fmt(row.amount)}=数量×单价，疑似金额列被自算填充；请核对原单金额列`);
+          row.flags.review = true;
         }
       }
 
@@ -496,14 +458,7 @@
         row.flags.review = true;
       }
 
-      // 金额仍 ≥ 100 且单价合理：若数量不合理，只标待核对，不自动改金额
-      if (U.ok(row.amount) && row.amount >= 100 && U.ok(row.price) && row.price < 100) {
-        const calcQ = row.amount / row.price;
-        if (!this._isNiceQty(calcQ)) {
-          fixNotes.push(`金额${U.fmt(row.amount)}与单价${U.fmt(row.price)}无法得到合理数量，请核对原单金额列`);
-          row.flags.review = true;
-        }
-      }
+      // 不再做「分→元」相关兜底：金额与单价按原值保留，由用户在表格中核对。
 
       row.flags.review = mn.review || rc.review || row.flags.review;
       if (nameUnit.unit) fixNotes.unshift(`单位「${nameUnit.unit}」已从名称拆分`);
