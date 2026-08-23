@@ -402,10 +402,15 @@
           }
           // ★ 原始三值自洽性检查（抓手机端列错位：OCR 把别行的数字填到本行）
           //   在 reconcile 之后用原始 it 值判断——即使 reconcile 已用金额反推修正了 qty/price，
-          //   如果原始偏差极大（如 1350→135），仍需标红让用户知道模型读错了金额
+          //   如果原始偏差极大（如 1350→135），仍需标红让用户知道模型读错了金额。
+          //   分/元双感知：金额列可能是「分」（如 414 分），此时应比对 数量×单价×100。
           if (U.ok(it.qty) && U.ok(it.price) && U.ok(it.amount)) {
-            const calc = it.qty * it.price;
-            const dev = Math.abs(calc - it.amount) / Math.max(it.amount, 1);
+            const calc = it.qty * it.price;          // 元
+            const calcFen = calc * 100;              // 分
+            const dev = Math.min(
+              Math.abs(calc - it.amount) / Math.max(it.amount, 1),
+              Math.abs(calcFen - it.amount) / Math.max(it.amount, 1)
+            );
             if (dev > 0.5) {
               rows[i].flags.review = true;
               rows[i].flags.note = (rows[i].flags.note ? rows[i].flags.note + '；' : '') +
@@ -516,7 +521,8 @@
         this.book.rows = this.book.rows.map(r => {
           const nr = M.processRow({
             id: r.id, date: r.date, cat: r.cat, name: r.rawName || r.name,
-            qty: r.qty, price: r.price, amount: r.amount, src: r.src, photo: r.photo
+            qty: r.qty, price: r.price, amount: r.amount, rawAmount: r.rawAmount,
+            src: r.src, photo: r.photo
           }, S.cfg, month);
           nr.daily = r.daily;
           return nr;
@@ -669,7 +675,8 @@
       tr.appendChild(mkCell(r.name, 'name', 'nm'));
       tr.appendChild(mkCell(U.fmt(r.qty), 'qty', 'num'));
       tr.appendChild(mkCell(U.fmt(r.price), 'price', 'num'));
-      tr.appendChild(mkCell(U.fmt(r.amount), 'amount', 'num'));
+      // 金额列：直接显示识别到的原始值（分单位不换算），记账金额另存 row.amount（元）
+      tr.appendChild(mkCell(U.fmt(r.rawAmount != null ? r.rawAmount : r.amount), 'amount', 'num'));
 
       // 来源标记
       const td = el('td');
@@ -732,7 +739,24 @@
       if (key === 'date') row.date = U.parseDate(val, parseInt(this.book.ym.slice(2), 10));
       else if (key === 'cat') row.cat = val;
       else if (key === 'name') { row.name = String(val).trim(); row.rawName = row.name; }
-      else row[key] = U.toNum(val);
+      else if (key === 'amount') {
+        // 金额编辑：原始值存 rawAmount（表格显示），并据分单位检测换算记账金额（元）
+        const v = U.toNum(val);
+        row.rawAmount = v;
+        if (U.ok(v) && U.ok(row.price) && row.price > 0 && row.price < 100) {
+          const fenRatio = v / row.price;
+          if (fenRatio >= 50) {
+            const candQ = Math.round(fenRatio / 100);
+            const expFen = candQ * row.price * 100;
+            row.amount = (candQ >= 1 && candQ <= 50 && Math.abs(v - expFen) / Math.max(expFen, 1) < 0.02)
+              ? U.r2(v / 100) : v;
+          } else {
+            row.amount = v;
+          }
+        } else {
+          row.amount = v;
+        }
+      } else row[key] = U.toNum(val);
 
       const f = row.flags || (row.flags = { derived: [], note: '' });
       f.derived = [];

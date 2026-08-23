@@ -354,6 +354,7 @@
         qty: U.toNum(raw.qty),
         price: U.toNum(raw.price),
         amount: U.toNum(raw.amount),
+        rawAmount: U.ok(raw.rawAmount) ? U.toNum(raw.rawAmount) : U.toNum(raw.amount), // 原始识别到的金额（分单位不换算），表格直接显示此值
         src: raw.src || 'manual',
         photo: raw.photo || '',
         rawName: nameUnit.name,
@@ -429,22 +430,32 @@
       }
 
       // ★ 4. 异常标记：金额 ≈ 单价（OCR 把金额列误读成单价列的典型特征）
-      // 例如原图单价 4.85 元、金额 485 分，模型错填成 amount=4.85；只标待核对，不改金额。
+      // 例如模型错填成 amount=4.85（应为 485 分）。只标待核对，不改金额。
+      // 分感知：若 rawAmount 本就是「分」（≈单价×100），换算后 amount=price 属正常，不误标。
       if (U.ok(row.price) && U.ok(row.amount) && row.price > 0 && row.price < 100) {
         const ratio = row.amount / row.price;
         if (ratio >= 0.98 && ratio <= 1.02) {
-          fixNotes.push(`金额${U.fmt(row.amount)}≈单价${U.fmt(row.price)}，疑似金额列读成单价列；请核对原单金额列（应为三位整数分）`);
-          row.flags.review = true;
+          const rawA = (row.rawAmount != null) ? row.rawAmount : row.amount;
+          const isFen = rawA >= 100 && Math.abs(rawA - row.amount * 100) / Math.max(row.amount, 1) < 0.02;
+          if (!isFen) {
+            fixNotes.push(`金额${U.fmt(row.amount)}≈单价${U.fmt(row.price)}，疑似金额列读成单价列；请核对原单金额列（应为三位整数分）`);
+            row.flags.review = true;
+          }
         }
       }
 
       // ★ 5. 异常标记：金额精确等于 数量×单价（OCR 用自算填充金额列，没读原金额列）
-      // 例如 qty=2, price=3.06, amount=6.12；只标待核对，不改金额。
+      // 例如 qty=2, price=3.06, amount=6.12。只标待核对，不改金额。
+      // 分感知：分单据换算后 amount=qty×price 属正常，不误标。
       if (U.ok(row.qty) && U.ok(row.price) && U.ok(row.amount) && row.qty > 0 && row.price > 0) {
         const calcAmount = U.r2(row.qty * row.price);
         if (Math.abs(row.amount - calcAmount) < 0.005 && row.amount > 0 && row.amount < 100) {
-          fixNotes.push(`金额${U.fmt(row.amount)}=数量×单价，疑似金额列被自算填充；请核对原单金额列（应为三位整数分）`);
-          row.flags.review = true;
+          const rawA = (row.rawAmount != null) ? row.rawAmount : row.amount;
+          const isFen = rawA >= 100 && Math.abs(rawA - calcAmount * 100) / Math.max(calcAmount, 1) < 0.02;
+          if (!isFen) {
+            fixNotes.push(`金额${U.fmt(row.amount)}=数量×单价，疑似金额列被自算填充；请核对原单金额列（应为三位整数分）`);
+            row.flags.review = true;
+          }
         }
       }
 
