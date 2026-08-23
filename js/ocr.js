@@ -13,8 +13,12 @@
   var MAX_PIXELS = 4096 * 4096;
 
   /* ---------- 图片压缩（通用 + 手写增强） ---------- */
-  function compress(file, maxW) {
-    maxW = Math.max(800, Math.min(4096, maxW || 1800));
+  function compress(file, maxW, opts) {
+    opts = opts || {};
+    var minW = opts.forMobile ? 1200 : 800;
+    var maxLimit = opts.forMobile ? 2000 : 4096;
+    var defW = opts.forMobile ? 1600 : 2200; // 电脑端手写单默认更高分辨率
+    maxW = Math.max(minW, Math.min(maxLimit, maxW || defW));
     return new Promise(function (res, rej) {
       var url = URL.createObjectURL(file);
       var cleanup = function () { try { URL.revokeObjectURL(url); } catch (e) { } };
@@ -37,7 +41,7 @@
           cx.drawImage(bitmap, 0, 0, w, h);
           if (bitmap.close) try { bitmap.close(); } catch (e) { }
 
-          // ★ 手写单据对比度增强：灰度拉伸（提升淡字/圆珠笔字迹的可读性）
+          // 灰度拉伸对比度增强
           var imgData = cx.getImageData(0, 0, w, h);
           var d = imgData.data;
           var minR = 255, maxR = 0, minG = 255, maxG = 0, minB = 255, maxB = 0;
@@ -54,8 +58,77 @@
           }
           cx.putImageData(imgData, 0, 0);
 
+          var sharp = estimateSharpness(d, w, h);
+
+          // 自动旋转：竖拍横版单据转正
+          if (h > w * 1.3) {
+            var rotCv = document.createElement('canvas');
+            rotCv.width = h; rotCv.height = w;
+            var rcx = rotCv.getContext('2d');
+            rcx.translate(h, 0);
+            rcx.rotate(Math.PI / 2);
+            rcx.drawImage(cv, 0, 0);
+            cv = rotCv; cx = rcx;
+            var tmp = w; w = h; h = tmp;
+          }
+
+          // 按清晰度分流处理：打印件去摩尔纹+不锐化；手写件全套增强
+          if (sharp >= 12) {
+            var moireCv = document.createElement('canvas');
+            moireCv.width = w; moireCv.height = h;
+            var mctx = moireCv.getContext('2d');
+            try { mctx.filter = 'blur(0.6px)'; } catch (e) { }
+            mctx.drawImage(cv, 0, 0);
+            mctx.filter = 'none';
+            cv = moireCv; cx = mctx;
+          } else {
+            var enhanced = enhanceHandwriting(imgData, w, h);
+
+            // 多尺度 unsharp mask
+            var sW1 = Math.max(4, Math.round(w / 8)), sH1 = Math.max(4, Math.round(h / 8));
+            var sm1 = document.createElement('canvas'); sm1.width = sW1; sm1.height = sH1;
+            var sm1x = sm1.getContext('2d');
+            sm1x.drawImage(cv, 0, 0, sW1, sH1);
+            cx.globalAlpha = 0.35;
+            cx.drawImage(sm1, 0, 0, w, h);
+
+            var sW2 = Math.max(8, Math.round(w / 4)), sH2 = Math.max(8, Math.round(h / 4));
+            var sm2 = document.createElement('canvas'); sm2.width = sW2; sm2.height = sH2;
+            var sm2x = sm2.getContext('2d');
+            var cvData = cx.getImageData(0, 0, w, h);
+            cx.putImageData(cvData, 0, 0);
+            sm2x.drawImage(cv, 0, 0, sW2, sH2);
+            cx.globalAlpha = 0.20;
+            cx.drawImage(sm2, 0, 0, w, h);
+            cx.globalAlpha = 1.0;
+
+            // 笔画加粗
+            try {
+              var thickCv = document.createElement('canvas');
+              thickCv.width = w; thickCv.height = h;
+              var tCx = thickCv.getContext('2d');
+              tCx.filter = 'blur(0.4px)';
+              tCx.drawImage(cv, 0, 0);
+              tCx.filter = 'none';
+              var curData = cx.getImageData(0, 0, w, h);
+              var blurData = tCx.getImageData(0, 0, w, h);
+              var cd = curData.data, bd = blurData.data;
+              var len = cd.length;
+              for (var p = 0; p < len; p += 4) {
+                var dr = cd[p] - bd[p], dg = cd[p+1] - bd[p+1], db = cd[p+2] - bd[p+2];
+                var gray = cd[p] * 0.299 + cd[p+1] * 0.587 + cd[p+2] * 0.114;
+                if (gray < 180) {
+                  cd[p]   = Math.max(0, Math.min(255, cd[p]   - dr * 0.25));
+                  cd[p+1] = Math.max(0, Math.min(255, cd[p+1] - dg * 0.25));
+                  cd[p+2] = Math.max(0, Math.min(255, cd[p+2] - db * 0.25));
+                }
+              }
+              cx.putImageData(curData, 0, 0);
+            } catch (thickErr) { }
+          }
+
           cleanup();
-          res(cv.toDataURL('image/jpeg', 0.92));
+          res(cv.toDataURL('image/jpeg', 0.95));
         } catch (e) { cleanup(); rej(e); }
       };
 
@@ -68,13 +141,12 @@
             var sc = (w > maxW) ? (maxW / w) : 1;
             if (w * h * sc * sc > MAX_PIXELS) sc = Math.sqrt(MAX_PIXELS / (w * h));
             w = Math.max(1, Math.round(w * sc)); h = Math.max(1, Math.round(h * sc));
-            var cv = document.createElement('canvas');
-            cv.width = w; cv.height = h;
+            var cv = document.createElement('canvas'); cv.width = w; cv.height = h;
             var cx = cv.getContext('2d');
             cx.fillStyle = '#fff'; cx.fillRect(0, 0, w, h);
             cx.drawImage(img, 0, 0, w, h);
             cleanup();
-            res(cv.toDataURL('image/jpeg', 0.92));
+            res(cv.toDataURL('image/jpeg', 0.95));
           } catch (e) { cleanup(); rej(e); }
         };
         img.onerror = function () { cleanup(); rej(new Error('浏览器无法解码此图片')); };
@@ -89,6 +161,10 @@
         fallbackImg();
       }
     });
+  }
+
+  function compressForMobile(file, maxW) {
+    return compress(file, maxW, { forMobile: true });
   }
 
   /* ---------- 手机拍照专用图片增强（2026-08-17 大升级：手写件专项） ---------- */
@@ -163,242 +239,28 @@
     return { radius: radius, imgData: imgData };
   }
 
-  function compressForMobile(file, maxW) {
-    maxW = Math.max(1200, Math.min(2000, maxW || 1600));
-    return new Promise(function (res, rej) {
-      var url = URL.createObjectURL(file);
-      var cleanup = function () { try { URL.revokeObjectURL(url); } catch (e) { } };
-
-      var render = function (bitmap) {
-        try {
-          var w = bitmap.width, h = bitmap.height;
-          if (!w || !h) throw new Error('图片尺寸为 0');
-          var scale = (w > maxW) ? (maxW / w) : 1;
-          if (w * h * scale * scale > MAX_PIXELS) scale = Math.sqrt(MAX_PIXELS / (w * h));
-          w = Math.max(1, Math.round(w * scale)); h = Math.max(1, Math.round(h * scale));
-
-          var cv = document.createElement('canvas');
-          cv.width = w; cv.height = h;
-          var cx = cv.getContext('2d');
-
-          cx.fillStyle = '#fff'; cx.fillRect(0, 0, w, h);
-          cx.drawImage(bitmap, 0, 0, w, h);
-          if (bitmap.close) try { bitmap.close(); } catch (e) { }
-
-          // 对比度增强：灰度拉伸
-          var imgData = cx.getImageData(0, 0, w, h);
-          var d = imgData.data;
-          var minR = 255, maxR = 0, minG = 255, maxG = 0, minB = 255, maxB = 0;
-          for (var i = 0; i < d.length; i += 4) {
-            if (d[i] < minR) minR = d[i]; if (d[i] > maxR) maxR = d[i];
-            if (d[i + 1] < minG) minG = d[i + 1]; if (d[i + 1] > maxG) maxG = d[i + 1];
-            if (d[i + 2] < minB) minB = d[i + 2]; if (d[i + 2] > maxB) maxB = d[i + 2];
-          }
-          var rangeR = Math.max(1, maxR - minR), rangeG = Math.max(1, maxG - minG), rangeB = Math.max(1, maxB - minB);
-          for (var j = 0; j < d.length; j += 4) {
-            d[j] = Math.round(Math.min(255, (d[j] - minR) / rangeR * 255 * 0.95 + 12));
-            d[j + 1] = Math.round(Math.min(255, (d[j + 1] - minG) / rangeG * 255 * 0.95 + 12));
-            d[j + 2] = Math.round(Math.min(255, (d[j + 2] - minB) / rangeB * 255 * 0.95 + 12));
-          }
-          cx.putImageData(imgData, 0, 0);
-          var sharp = estimateSharpness(d, w, h); // 旋转前尺寸，评估清晰度
-
-          // ★ 自动旋转检测：竖拍横版单据（高>宽*1.3）自动转正 90°
-          var needsRotate = (h > w * 1.3);
-          if (needsRotate) {
-            var rotCv = document.createElement('canvas');
-            rotCv.width = h; rotCv.height = w;
-            var rcx = rotCv.getContext('2d');
-            rcx.translate(h, 0);
-            rcx.rotate(Math.PI / 2);
-            rcx.drawImage(cv, 0, 0);
-            cv = rotCv; cx = rcx;
-            var tmp = w; w = h; h = tmp;
-          }
-
-          // ★ 按清晰度分流处理：打印件去摩尔纹+不锐化；手写件全套增强
-          if (sharp >= 12) {
-            // 打印/清晰件：手机拍常有高频彩色波纹(摩尔纹)，轻度模糊抑制；锐化会放大网格线，故不锐化
-            var moireCv = document.createElement('canvas');
-            moireCv.width = w; moireCv.height = h;
-            var mctx = moireCv.getContext('2d');
-            try { mctx.filter = 'blur(0.6px)'; } catch (e) { }
-            mctx.drawImage(cv, 0, 0);
-            mctx.filter = 'none';
-            cv = moireCv; cx = mctx;
-          } else {
-            // ★★★ 手写/模糊件：全套增强管线（2026-08-17 升级）★★★
-            // Step A: 通道分离对比度 + gamma提亮（在 imgData 上直接操作）
-            var enhanced = enhanceHandwriting(imgData, w, h);
-
-            // Step B: 多尺度 unsharp mask（替代原来的单层 0.3 锐化）
-            // 小尺度：1/8 缩放 → 锐化细笔画边缘（alpha=0.35）
-            var sW1 = Math.max(4, Math.round(w / 8)), sH1 = Math.max(4, Math.round(h / 8));
-            var sm1 = document.createElement('canvas'); sm1.width = sW1; sm1.height = sH1;
-            var sm1x = sm1.getContext('2d');
-            sm1x.drawImage(cv, 0, 0, sW1, sH1);
-            cx.globalAlpha = 0.35;
-            cx.drawImage(sm1, 0, 0, w, h);
-
-            // 中尺度：1/4 缩放 → 增强整体文字区域对比度（alpha=0.20）
-            var sW2 = Math.max(8, Math.round(w / 4)), sH2 = Math.max(8, Math.round(h / 4));
-            var sm2 = document.createElement('canvas'); sm2.width = sW2; sm2.height = sH2;
-            var sm2x = sm2.getContext('2d');
-            // 需要重新读取 canvas（因为上面已经 draw 了 sm1）
-            var cvData = cx.getImageData(0, 0, w, h);
-            cx.putImageData(cvData, 0, 0); // 确保数据同步
-            sm2x.drawImage(cv, 0, 0, sW2, sH2);
-            cx.globalAlpha = 0.20;
-            cx.drawImage(sm2, 0, 0, w, h);
-            cx.globalAlpha = 1.0;
-
-            // Step C: 轻微笔画加粗（用极轻量 blur 反向叠加，模拟形态学膨胀）
-            // 对比原图与轻微模糊版，把边缘差异放大 → 细笔画变粗
-            try {
-              var thickCv = document.createElement('canvas');
-              thickCv.width = w; thickCv.height = h;
-              var tCx = thickCv.getContext('2d');
-              tCx.filter = 'blur(0.4px)';
-              tCx.drawImage(cv, 0, 0);
-              tCx.filter = 'none';
-              // 取当前图像与模糊版的差值（边缘），叠加回去
-              var curData = cx.getImageData(0, 0, w, h);
-              var blurData = tCx.getImageData(0, 0, w, h);
-              var cd = curData.data, bd = blurData.data;
-              for (var p = 0; p < len; p += 4) {
-                var dr = cd[p] - bd[p], dg = cd[p+1] - bd[p+1], db = cd[p+2] - bd[p+2];
-                // 只增强暗笔画（文字通常比背景暗）：如果像素比背景暗，加粗它
-                var gray = cd[p] * 0.299 + cd[p+1] * 0.587 + cd[p+2] * 0.114;
-                if (gray < 180) { // 暗区域（可能是文字）
-                  cd[p]   = Math.max(0, Math.min(255, cd[p]   - dr * 0.25));
-                  cd[p+1] = Math.max(0, Math.min(255, cd[p+1] - dg * 0.25));
-                  cd[p+2] = Math.max(0, Math.min(255, cd[p+2] - db * 0.25));
-                }
-              }
-              cx.putImageData(curData, 0, 0);
-            } catch (thickErr) { /* 笔画加粗失败不影响主流程 */ }
-          }
-
-          cleanup();
-          res(cv.toDataURL('image/jpeg', 0.95));
-        } catch (e) { cleanup(); rej(e); }
-      };
-
-      var fallbackImg = function () {
-        var img = new Image();
-        img.onload = function () {
-          try {
-            var w = img.naturalWidth, h = img.naturalHeight;
-            if (!w || !h) throw new Error('图片尺寸为 0');
-            var sc = (w > maxW) ? (maxW / w) : 1;
-            if (w * h * sc * sc > MAX_PIXELS) sc = Math.sqrt(MAX_PIXELS / (w * h));
-            w = Math.max(1, Math.round(w * sc)); h = Math.max(1, Math.round(h * sc));
-            var cv = document.createElement('canvas'); cv.width = w; cv.height = h;
-            var cx = cv.getContext('2d');
-            cx.fillStyle = '#fff'; cx.fillRect(0, 0, w, h);
-            cx.drawImage(img, 0, 0, w, h);
-            cleanup();
-            res(cv.toDataURL('image/jpeg', 0.95));
-          } catch (e) { cleanup(); rej(e); }
-        };
-        img.onerror = function () { cleanup(); rej(new Error('浏览器无法解码此图片')); };
-        img.src = url;
-      };
-
-      if (typeof window.createImageBitmap === 'function') {
-        createImageBitmap(file, { imageOrientation: 'from-image' }).then(render).catch(function () { fallbackImg(); });
-      } else { fallbackImg(); }
-    });
-  }
-
-  /* ---------- 商品库上下文 ---------- */
-  function buildContext(items, cats, limitPerCat) {
-    limitPerCat = limitPerCat || 55;
-    var byCat = new Map();
-    (items || []).forEach(function (it) {
-      if (!byCat.has(it.cat)) byCat.set(it.cat, []);
-      byCat.get(it.cat).push(it);
-    });
-    var lines = [];
-    var order = (cats && cats.length ? cats : Array.from(byCat.keys()));
-    order.forEach(function (c) {
-      var arr = byCat.get(c);
-      if (!arr || !arr.length) return;
-      arr.sort(function (a, b) { return (b.n || 0) - (a.n || 0); });
-      var names = arr.slice(0, limitPerCat).map(function (it) {
-        return U.ok(it.ref) ? it.name + '(' + U.fmt(it.ref) + ')' : it.name;
-      });
-      lines.push('\u3010' + c + '\u3011' + names.join('\u3001'));
-    });
-    byCat.forEach(function (arr, c) {
-      if (order.indexOf(c) >= 0) return;
-      arr.sort(function (a, b) { return (b.n || 0) - (a.n || 0); });
-      lines.push('\u3010' + c + '\u3011' + arr.slice(0, limitPerCat).map(function (it) {
-        return U.ok(it.ref) ? it.name + '(' + U.fmt(it.ref) + ')' : it.name;
-      }).join('\u3001'));
-    });
-    var txt = lines.join('\n');
-    if (txt.length > 9000) txt = txt.slice(0, 9000) + '\n\u2026\uff08\u5df2\u622a\u65ad\uff09';
-    return txt;
-  }
-
-  var SYS = '\u4f60\u662f\u9910\u996e\u91c7\u8d2d\u5355\u636e\u8bc6\u522b\u4e13\u5bb6\uff0c\u4e13\u95e8\u8bc6\u522b\u4e2d\u56fd\u9910\u996e\u95e8\u5e97\u7684\u624b\u5199\u91c7\u8d2d\u5355/\u9001\u8d27\u5355/purchase list\u3002\n\u4f60\u7684\u8f93\u51fa\u5fc5\u987b\u662f\u4e25\u683c\u7684 JSON\uff0c\u4e0d\u8981\u4efb\u4f55\u89e3\u91ca\u6587\u5b57\uff0c\u4e0d\u8981 markdown \u4ee3\u7801\u5757\u4ee5\u5916\u7684\u5185\u5bb9\u3002';
-
-function buildPrompt(ctx, cats, hintDate, hintCat) {
+  function buildPrompt(ctx, cats, hintDate, hintCat, isMobile) {
     const catsStr = (cats || []).join('、') || '（无）';
     const ctxStr = ctx || '（暂无历史数据）';
     const hintDateStr = hintDate ? `
-⚠️ 用户提示：本单录单日期应为 ${hintDate} 前后。` : '';
+⚠️ 用户提示：本单录单日期/送货日期应为 ${hintDate} 前后。` : '';
     const hintCatStr = hintCat ? `
 ⚠️ 用户提示：本单所有商品都属「${hintCat}」分类，category 必须填「${hintCat}」。` : '';
-    return `你是餐饮采购单表格结构化提取助手，专门识别手写/打印混合的采购单/送货单。
+    const mobileNote = isMobile ? `【手机拍照说明】这是手机摄像头直接拍摄的照片，请自动应对：方向（可能竖拍）、透视倾斜、反光/阴影、背景干扰、打印件摩尔纹、数字变形粘连。
+` : '';
+    return `${mobileNote}你是餐饮采购单表格结构化提取助手，专门识别手写/打印混合的采购单/送货单。
 【输出格式】严格只输出一个 JSON 对象，不要任何解释、前言、备注、markdown 代码块之外的内容：
 {
-  "date": "录单日期，必填，格式 m.d，如 6.1、3.12",
+  "date": "录单日期/送货日期，必填，格式 m.d，如 6.1、3.12",
   "category": "分类名，从下方分类清单选最匹配的一个；判断不了填空字符串",
   "items": [{"name":"名称和规格","qty":数量,"price":单价,"amount":金额,"blur":["模糊字段名"],"conf":0.0~1.0}]
 }
-【读取范围】只读取红色划线/方框内的商品表格，以及表头上方「录单日期/送货日期」。绝对不要读取或输出：制单人/经办人/送货人/收货单位/仓库、送货日期页脚/打印时间/第N页、总重量kg/总件数、单据编号/电话/二维码/地址。
+【读取范围】只读取红色划线/方框内的商品表格，以及单据顶部/页边/表头上方「录单日期/送货日期」（注意竖写、手写日期，如 2026年7月5日 → 7.5）。绝对不要读取或输出：制单人/经办人/送货人/收货单位/仓库、送货日期黄联页脚/打印时间/第N页、总重量kg/总件数、单据编号/电话/二维码/地址。
 【分类清单】${catsStr}
 【商品库参考（字迹完全模糊或字段缺失时辅助补全）】${ctxStr}
 【核心规则】
 1. 名称规格严格忠于原图文字。仅字迹完全模糊时才用商品库比对补全名称；字段缺失时可用商品库历史单价/名称推算，但严禁编造原图中不存在的商品。
-2. 禁止输出单据不存在的商品；同一张单据内部出现完全重复条目时只保留一条。
-3. 所有数字最多保留 2 位小数。
-【手写打印混合单规则】
-A. 不要忽略手写笔迹；表格行列必须严格对齐，禁止把上一行数字读到下一行，禁止把 A 行数量读到 B 行商品。
-B. 手写数字 7/1/4、6/8/0 极易混淆。遇到这类数字时，优先参考本张单据底部「合计金额」做辅助校验，但不得直接篡改单元格内本身已看清的数字。
-C. 金额列如果模糊、被涂改或只写了一半（如冬菇金额仅写一个「4」），不能留空或输出 0；应结合数量列、单价列以及商品库历史单价，按 数量×单价 推算金额。
-【数字校验优先级】
-① 原图印刷/手写清晰时，必须以原图为准，不许篡改。
-② 金额清晰优先采信金额；同时用 qty×price 校验 amount。若金额清晰且单价清晰，反算数量校验；数据库历史单价仅作异常辅助校验，不能覆盖原图单价。
-③ 原图金额、单价、数量都可读时，三者相互校验，绝不允许为凑等式修改数量或单价。
-④ 只有某一字段模糊/缺失时，才允许用另外两值推算；推算结果必须在 blur 字段中标注「金额推算」「数量推算」「单价推算」等。
-【防漏行】先数表格数据行数 N（看序号列最后一个数），items 必须恰好 N 个，逐行提取不跳行、不并两行、不把表头当数据。${hintDateStr}${hintCatStr}`;
-  }
-
-  /* ---------- 手机拍照专用提示词（完全独立，不继承电脑端提示词） ---------- */
-function buildPromptForMobile(ctx, cats, hintDate, hintCat) {
-    const catsStr = (cats || []).join('、') || '（无）';
-    const ctxStr = ctx || '（暂无历史数据）';
-    const hintDateStr = hintDate ? `
-⚠️ 用户提示：本单录单日期应为 ${hintDate} 前后。` : '';
-    const hintCatStr = hintCat ? `
-⚠️ 用户提示：本单所有商品都属「${hintCat}」分类，category 必须填「${hintCat}」。` : '';
-    return `你是餐饮采购单表格结构化提取助手，专门识别手机拍摄的手写/打印混合采购单/送货单。
-【手机拍照说明】这是手机摄像头直接拍摄的照片，请自动应对：方向（可能竖拍）、透视倾斜、反光/阴影、背景干扰、打印件摩尔纹、数字变形粘连。
-【输出格式】严格只输出一个 JSON 对象，不要任何解释、前言、备注、markdown 代码块之外的内容：
-{
-  "date": "录单日期，必填，格式 m.d，如 6.1、3.12",
-  "category": "分类名，从下方分类清单选最匹配的一个；判断不了填空字符串",
-  "items": [{"name":"名称和规格","qty":数量,"price":单价,"amount":金额,"blur":["模糊字段名"],"conf":0.0~1.0}]
-}
-【读取范围】只读取红色划线/方框内的商品表格，以及表头上方「录单日期/送货日期」。绝对不要读取或输出：制单人/经办人/送货人/收货单位/仓库、送货日期黄联页脚/打印时间/第N页、总重量kg/总件数、单据编号/电话/二维码/地址。
-【分类清单】${catsStr}
-【商品库参考（字迹完全模糊或字段缺失时辅助补全）】${ctxStr}
-【核心规则】
-1. 名称规格严格忠于原图文字。仅字迹完全模糊时才用商品库比对补全名称；字段缺失时可用商品库历史单价/名称推算，但严禁编造原图中不存在的商品。
-2. 禁止输出单据不存在的商品；同一张单据内部出现完全重复条目时只保留一条。
+2. 禁止输出单据不存在的商品；同一张单据内部出现完全重复条目时只保留一条；禁止跨单据合并汇总。
 3. 所有数字最多保留 2 位小数。
 【手写打印混合单规则】
 A. 不要忽略手写笔迹；表格行列必须严格对齐，禁止把上一行数字读到下一行，禁止把 A 行数量读到 B 行商品。
@@ -413,10 +275,16 @@ C. 金额列如果模糊、被涂改或只写了一半（如冬菇金额仅写�
 第一步：先数表格有多少行商品数据（不含表头），看序号列最后一个数 N，记住 N。
 第二步：按 1、2、3…N 顺序逐行提取，items 必须恰好 N 个，不跳行、不并两行为一、不把表头当数据行。打印密集表格行距小最易漏，请逐条对准网格线。
 【手写数字陷阱】小数点不能凭空插入（原图「42」「189」是整数就别输出 4.2/18.9）；序号列不是金额；同一单金额量级应相近，某行明显小一个量级很可能是小数点读错。
-【手写汉字品名】逐笔画辨认，不要只看大概；常见误读（实↔深、冬↔冻、耳↔鱼、边↔过）请额外小心；包装单位（整箱/500g）读进 name。${hintDateStr}${hintCatStr}`;
+【手写汉字品名】逐笔画辨认，不要只看大概；常见误读（实↔深、冬↔冻、耳↔鱼、边↔过）请额外小心；鲜肉短名如「肉眼/肉碎/上肉碎/花肉/梅肉」、蔬菜短名如「菜心/生菜/西蓝花」、粮油短名如「冬菇/砂糖/幼砂糖」极易混淆，请对照上下文和单价谨慎判断；包装单位（整箱/500g）读进 name。${hintDateStr}${hintCatStr}`;
   }
 
-  /* ---------- JSON 容错解析 ---------- */
+  /* ---------- 手机拍照专用提示词（复用通用增强提示词） ---------- */
+function buildPromptForMobile(ctx, cats, hintDate, hintCat) {
+    return buildPrompt(ctx, cats, hintDate, hintCat, true);
+  }
+
+  /* ---------- 手机拍照专用提示词（完全独立，不继承电脑端提示词） ---------- */
+/* ---------- JSON 容错解析 ---------- */
   function parseJSON(text) {
     if (!text) throw new Error('\u6a21\u578b\u8fd4\u56de\u7a7a\u5185\u5bb9');
     var s = String(text).trim();
