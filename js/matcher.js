@@ -119,7 +119,7 @@
       } else {
         for (const it of this.idx.all) {
           if (U.normName(it.name) === nraw) {
-            out.name = it.name; out.price = U.ok(it.ref) ? it.ref : price; out.score = 1; out.source = 'exact'; out.cat = it.cat; return out;
+            out.name = it.name; out.price = price; out.score = 1; out.source = 'exact'; out.cat = it.cat; return out;
           }
         }
       }
@@ -127,7 +127,7 @@
       // c. 别名精确命中
       for (const it of pool) {
         if (it.alias && it.alias.some(a => U.normName(a) === nraw)) {
-          out.name = it.name; out.price = U.ok(it.ref) ? it.ref : price; out.score = 1; out.source = 'alias'; out.cat = it.cat; return out;
+          out.name = it.name; out.price = price; out.score = 1; out.source = 'alias'; out.cat = it.cat; return out;
         }
       }
 
@@ -189,23 +189,11 @@
         return false;
       }
 
-      // 优先修正单价：单价≥100 几乎不可能是真实餐饮采购单价，视为漏小数点；
-      // 与商品库参考价偏差>20% 时，优先采用商品库标准价。
+      // 单价优先采用原图识别值，不再因为 ≥100 就÷100，也不再因与商品库偏差>20% 强制改库价。
+      // 商品库参考价只在单价缺失或模糊时用于补全（见下方「有金额无单价」分支）。
       if (U.ok(p) && p >= 100) {
-        if (U.ok(refPrice) && refPrice < 100) {
-          const badPrice = p;
-          p = refPrice; derived.push('price');
-          note = `单价${U.fmt(badPrice)}≥100，按商品库参考价修正为${U.fmt(p)}`;
-        } else {
-          const badPrice = p;
-          p = U.r4(p / 100); derived.push('price');
-          note = `单价${U.fmt(badPrice)}≥100，按漏小数点修正为${U.fmt(p)}`;
-        }
-      }
-      if (U.ok(refPrice) && U.ok(p) && refPrice < 100 && Math.abs(p - refPrice) / Math.max(refPrice, 1) > 0.20) {
-        const badPrice = p;
-        p = refPrice; derived.push('price');
-        note = (note ? note + '；' : '') + `单价${U.fmt(badPrice)}与商品库参考价${U.fmt(refPrice)}偏差>20%，已修正为${U.fmt(p)}`;
+        // 保留原图大整数单价，仅在内部备注说明；不做任何自动修正
+        note = `单价${U.fmt(p)}为原图识别值，已原样保留`;
       }
 
       // ===== 有金额 =====
@@ -337,7 +325,7 @@
         qty: U.toNum(raw.qty),
         price: U.toNum(raw.price),
         amount: U.toNum(raw.amount),
-        rawAmount: U.ok(raw.rawAmount) ? U.toNum(raw.rawAmount) : U.toNum(raw.amount), // 原始识别到的金额（分单位不换算），表格直接显示此值
+        rawAmount: U.ok(raw.rawAmount) ? U.toNum(raw.rawAmount) : U.toNum(raw.amount), // 原始识别到的金额（不换算），表格直接显示此值
         src: raw.src || 'manual',
         photo: raw.photo || '',
         rawName: nameUnit.name,
@@ -430,35 +418,13 @@
         }
       }
 
-      // 5. 数据库价存在但当前单价仍偏差大：用数据库价覆盖
-      if (U.ok(mn.price) && U.ok(row.price) && Math.abs(row.price - mn.price) / Math.max(mn.price, 1) > 0.20) {
-        row.price = mn.price;
-        if (row.flags.derived.indexOf('price') < 0) row.flags.derived.push('price');
-        fixNotes.push(`单价按商品库标准价修正为${U.fmt(mn.price)}`);
-        row.flags.review = true;
-      }
-
-      // 反推（金额优先 + 数据库单价优先）
+      // 反推（金额优先，单价采用原图识别值）
       const rc = this.reconcile(row.qty, row.price, row.amount, mn.price, cfg.tol);
       row.qty = rc.qty; row.price = rc.price; row.amount = rc.amount;
       row.flags.derived = rc.derived;
       if (rc.note) fixNotes.push(rc.note);
 
-      // ★ 最终兜底：单价仍 ≥ 100 时，餐饮采购几乎不可能，强制修正
-      if (U.ok(row.price) && row.price >= 100) {
-        const badPrice = row.price;
-        if (U.ok(mn.price)) {
-          row.price = mn.price;
-          fixNotes.push(`兜底修正：单价${U.fmt(badPrice)}仍≥100，按商品库价改为${U.fmt(mn.price)}`);
-        } else {
-          row.price = U.r4(badPrice / 100);
-          fixNotes.push(`兜底修正：单价${U.fmt(badPrice)}仍≥100，按漏小数点改为${U.fmt(row.price)}`);
-        }
-        if (row.flags.derived.indexOf('price') < 0) row.flags.derived.push('price');
-        row.flags.review = true;
-      }
-
-      // 不再做「分→元」相关兜底：金额与单价按原值保留，由用户在表格中核对。
+      // 不再做「分→元」或「单价≥100 强制÷100」相关兜底：金额与单价按原值保留，由用户在表格中核对。
 
       row.flags.review = mn.review || rc.review || row.flags.review;
       if (nameUnit.unit) fixNotes.unshift(`单位「${nameUnit.unit}」已从名称拆分`);
@@ -480,9 +446,7 @@
      * 行与行之间数字串读是高频错误：A 行的金额跑到 B 行金额位、B 行数量跑到 C 行。
      * 这里只做「疑似」标记（review=true），提示人工核对，绝不自动改写，避免二次破坏。
      * 检测（同一张照片内的相邻行）：
-     *   ① 当前行 amount ≈ 上一行 price×100（精确）→ 极可能把上一行单价格抄到了金额列（分单位）；
-     *   ② 当前行 amount ≈ 上一行 price（都是元级小数，误差<0.01）→ 把上一行单价抄到了金额列；
-     *   ③ 相邻两行 amount 完全相同且都为整数、数量都为 1 → 可能复制串行。
+     *   相邻两行 amount 完全相同且数量都为 1 → 可能复制串行。
      */
     detectSerial(rows) {
       const groups = new Map();
@@ -494,21 +458,7 @@
       groups.forEach(grp => {
         for (let i = 1; i < grp.length; i++) {
           const cur = grp[i], prev = grp[i - 1];
-          if (U.ok(cur.amount) && cur.amount >= 100 && U.ok(prev.price) && prev.price > 0) {
-            const expected = prev.price * 100;
-            if (Math.abs(cur.amount - expected) < 0.5) {
-              cur.flags.review = true;
-              cur.flags.note = (cur.flags.note ? cur.flags.note + '；' : '') +
-                `金额${U.fmt(cur.amount)}≈上一行单价${U.fmt(prev.price)}×100，疑似行错位，请核对原单`;
-            }
-          }
-          if (U.ok(cur.amount) && cur.amount < 100 && U.ok(prev.price) && prev.price < 100 &&
-              Math.abs(cur.amount - prev.price) < 0.01) {
-            cur.flags.review = true;
-            cur.flags.note = (cur.flags.note ? cur.flags.note + '；' : '') +
-              `金额${U.fmt(cur.amount)}与上一行单价${U.fmt(prev.price)}相同，疑似列错位，请核对原单`;
-          }
-          if (U.ok(cur.amount) && U.ok(prev.amount) && cur.amount >= 100 &&
+          if (U.ok(cur.amount) && U.ok(prev.amount) &&
               Math.abs(cur.amount - prev.amount) < 0.005 &&
               U.ok(cur.qty) && Math.abs(cur.qty - 1) < 0.05 &&
               U.ok(prev.qty) && Math.abs(prev.qty - 1) < 0.05) {

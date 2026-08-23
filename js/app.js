@@ -668,8 +668,8 @@
       tr.appendChild(mkCell(r.name, 'name', 'nm'));
       tr.appendChild(mkCell(U.fmt(r.qty), 'qty', 'num'));
       tr.appendChild(mkCell(U.fmt(r.price), 'price', 'num'));
-      // 金额列：直接显示 OCR 识别到的原始数字（如 414），不做任何 ÷100 换算，避免和单价(4.14)撞脸误判。
-      // 原始值存 row.rawAmount；内部记账/导出用的元值 row.amount（= 414÷100）只在导出时生效，表格不显示。
+      // 金额列：直接显示 OCR 识别到的原始数字（如 560），不做任何单位换算。
+      // row.rawAmount 与 row.amount 现在保持一致，都按原值显示和导出。
       tr.appendChild(mkCell(U.fmt(r.rawAmount != null ? r.rawAmount : r.amount), 'amount', 'num'));
 
       // 来源标记
