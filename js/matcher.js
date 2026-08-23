@@ -430,7 +430,24 @@
         }
       }
 
-      // ★ 4. 异常：金额 ≈ 单价²（OCR 把金额列误填成 price×qty 或列错位的典型特征）
+      // ★ 4. 异常：金额 ≈ 单价（OCR 把金额列误读成单价列的典型特征）
+      // 例如原图单价 4.85 元、金额 485 分，模型错填成 amount=4.85；qty 几乎总是 1。
+      if (U.ok(row.price) && U.ok(row.amount) && row.price > 0 && row.price < 100) {
+        const ratio = row.amount / row.price;
+        if (ratio >= 0.98 && ratio <= 1.02) {
+          const badAmount = row.amount;
+          const likelyAmount = U.r2(row.price * 100);
+          // 只有修正后金额（分）落在常见分范围内（100~999）才执行，避免误伤
+          if (likelyAmount >= 100 && likelyAmount <= 999) {
+            row.amount = likelyAmount;
+            fixNotes.push(`金额${U.fmt(badAmount)}等于单价${U.fmt(row.price)}，疑似金额列读成单价列；已按单价×100修正为${U.fmt(likelyAmount)}（分）`);
+            if (row.flags.derived.indexOf('amount') < 0) row.flags.derived.push('amount');
+            row.flags.review = true;
+          }
+        }
+      }
+
+      // ★ 5. 异常：金额 ≈ 单价²（OCR 把金额列误填成 price×qty 或列错位的典型特征）
       // 例如 price=4.14, amount=17.13 → amount/price=4.1377≈price。
       if (U.ok(row.price) && U.ok(row.amount) && row.price > 0) {
         const ratio = row.amount / row.price;

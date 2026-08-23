@@ -342,7 +342,7 @@
         const isMobile = p.source === 'mobile';
         const dataUrl = isMobile
           ? await OCR.compressForMobile(p.file, api.maxw || 1600)
-          : await OCR.compress(p.file, api.maxw || 2200);
+          : await OCR.compress(p.file, api.maxw || 2200, { enhance: !!api.desktopEnhance });
 
         // ★ 手机端模型可由用户在设置页「手机端模型」自行填写；
         //   留空时手机端跟随电脑端模型（api.model）保持一致
@@ -949,7 +949,8 @@
           key: $('#apiKey').value.trim(),
           conc: parseInt($('#apiConc').value, 10) || 6,
           maxw: parseInt($('#apiMaxW').value, 10) || 1800,
-          proxy: $('#apiProxy').value.trim()
+          proxy: $('#apiProxy').value.trim(),
+          desktopEnhance: $('#apiDesktopEnhance').checked
         };
         await S.saveCfg();
         toast('已保存', 'ok'); this.renderThumbs();
@@ -1020,6 +1021,7 @@
       $('#apiConc').value = a.conc || 6;
       $('#apiMaxW').value = a.maxw || 1800;
       $('#apiProxy').value = a.proxy || '';
+      $('#apiDesktopEnhance').checked = !!a.desktopEnhance;
       $('#cfgCats').value = (S.cfg.cats || []).join('\n');
       $('#cfgDaily').value = (S.cfg.dailyCats || []).join('、');
       $('#cfgAuto').value = S.cfg.thAuto;

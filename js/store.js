@@ -14,7 +14,7 @@
   const DEFAULT_CATS = ['环绿蔬菜', '面包', '粮油', '鲜肉', '裕笙隆', '汁水', '茶粉', '包装品', '创银'];
 
   const DEFAULT_CFG = {
-    api: { preset: '', base: '', model: '', key: '', conc: 2, maxw: 1800, proxy: '', mobileModel: '' },
+    api: { preset: '', base: '', model: '', key: '', conc: 2, maxw: 1800, proxy: '', mobileModel: '', desktopEnhance: false },
     cats: DEFAULT_CATS.slice(),
     dailyCats: ['环绿蔬菜'],
     thAuto: 0.92,
