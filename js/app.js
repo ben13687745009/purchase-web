@@ -25,8 +25,16 @@
     },
 
     async init() {
-      if (!U || !S || !M || !IMP || !OCR || !EXP) {
-        throw new Error('核心脚本未加载完整，请按 Ctrl+F5 强制刷新，或检查浏览器扩展是否拦截了 js/ocr.js');
+      const missing = [];
+      if (!U) missing.push('utils.js (U)');
+      if (!S) missing.push('store.js (Store)');
+      if (!M) missing.push('matcher.js (Matcher)');
+      if (!IMP) missing.push('importer.js (Importer)');
+      if (!OCR) missing.push('ocr.js (OCR)');
+      if (!EXP) missing.push('exporter.js (Exporter)');
+      if (missing.length) {
+        const errs = (window.__scriptErrors && window.__scriptErrors.length) ? ('\n脚本加载错误：' + window.__scriptErrors.join('；')) : '';
+        throw new Error('核心脚本未加载完整：' + missing.join('、') + '\n\n请按 Ctrl+F5 强制刷新，或检查浏览器扩展/安全软件是否拦截了上述脚本。' + errs);
       }
       await S.init();
       this.items = await S.allItems();
@@ -1056,9 +1064,16 @@
   window.addEventListener('DOMContentLoaded', () => {
     App.init().catch(e => {
       console.error(e);
+      const scripts = Array.from(document.querySelectorAll('script[src]')).map(s => {
+        const ok = s.src && s.src.includes('?v=');
+        return (ok ? '✓ ' : '✗ ') + (s.getAttribute('src') || '');
+      }).join('\n');
       document.body.innerHTML = `<div style="padding:40px;font-family:sans-serif">
-        <h2>启动失败</h2><pre style="color:#c0392b">${esc(e.message || e)}</pre>
-        <p>如果是通过双击 index.html 打开的，请改用附带的启动脚本（浏览器对本地文件的数据库有限制）。</p></div>`;
+        <h2>启动失败</h2>
+        <pre style="color:#c0392b;white-space:pre-wrap">${esc(e.message || e)}</pre>
+        <p>请按 <b>F12</b> 打开控制台，查看具体的红色报错信息，然后截图给我。</p>
+        <p>如果是通过双击 index.html 打开的，请改用附带的启动脚本（浏览器对本地文件的数据库有限制）。</p>
+        <pre style="background:#f4f4f4;padding:10px;border-radius:4px">已加载脚本列表：\n${esc(scripts)}</pre></div>`;
     });
   });
   g.App = App;
