@@ -103,11 +103,11 @@
       // b. 精确
       if (cat) {
         const hit = this.idx.byKey.get(cat + '|' + nraw);
-        if (hit) { out.name = hit.name; out.price = hit.ref; out.score = 1; out.source = 'exact'; out.cat = hit.cat; return out; }
+        if (hit) { out.name = hit.name; out.price = U.ok(price) ? price : hit.ref; out.score = 1; out.source = 'exact'; out.cat = hit.cat; return out; }
       } else {
         for (const it of this.idx.all) {
           if (U.normName(it.name) === nraw) {
-            out.name = it.name; out.price = it.ref; out.score = 1; out.source = 'exact'; out.cat = it.cat; return out;
+            out.name = it.name; out.price = U.ok(price) ? price : it.ref; out.score = 1; out.source = 'exact'; out.cat = it.cat; return out;
           }
         }
       }
@@ -115,7 +115,7 @@
       // c. 别名精确命中
       for (const it of pool) {
         if (it.alias && it.alias.some(a => U.normName(a) === nraw)) {
-          out.name = it.name; out.price = it.ref; out.score = 1; out.source = 'alias'; out.cat = it.cat; return out;
+          out.name = it.name; out.price = U.ok(price) ? price : it.ref; out.score = 1; out.source = 'alias'; out.cat = it.cat; return out;
         }
       }
 
@@ -140,12 +140,12 @@
       });
 
       if (best && bs >= thAuto) {
-        out.name = best.name; out.price = best.ref; out.score = bs;
+        out.name = best.name; out.price = U.ok(price) ? price : best.ref; out.score = bs;
         out.source = bs >= 0.999 ? 'exact' : 'fuzzy'; out.cat = best.cat;
         return out;
       }
       if (best && bs >= thRev) {
-        out.name = best.name; out.price = best.ref; out.score = bs;
+        out.name = best.name; out.price = U.ok(price) ? price : best.ref; out.score = bs;
         out.source = 'fuzzy-low'; out.review = true; out.cat = best.cat;
         return out;
       }
@@ -154,26 +154,18 @@
       return out;
     },
 
-    /* ---------- 三缺一反推（金额优先版）----------
+    /* ---------- 三缺一反推（以 OCR 识别为准，校验为辅）----------
      *
-     * 核心原则：金额（amount）是绝对锚点，永远不以数量或单价去修正金额。
-     * 原始单据上「金额」列通常是手写最清晰/最大的数字，且是最终结算值。
+     * 核心原则：OCR 识别出的数量、单价、金额优先保留；校验只用于补全缺失字段
+     * 或标记明显矛盾，不主动覆盖 OCR 已识别出的合理数值。
      *
      * 策略：
-     *   ① 有金额+单价          → 数量 = 金额 ÷ 单价（覆盖OCR给的任何数量）
-     *   ② 有金额+数量          → 单价 = 金额 ÷ 数量（覆盖OCR给的任何单价）
-     *   ③ 三值齐全且一致       → 全部保留，不修改
-     *   ④ 三值齐全但不一致     → 用数据库单价做裁判：
-     *      - 数据库单价 ≈ OCR单价 → 认定单价对、数量错 → 按①重算数量
-     *      - 数据库单价 ≈ (金额÷OCR数量) → 认定数量对、单价错 → 按②重算单价
-     *      - 数据库单价都不接近 → 用「合理性」判断哪个更像真实值
+     *   ① 三值齐全且一致       → 全部保留
+     *   ② 三值齐全但不一致     → 保留 OCR 原始值，标记待核对（不自动修正）
+     *   ③ 有金额+单价          → 数量 = 金额 ÷ 单价（数量缺失时）
+     *   ④ 有金额+数量          → 单价 = 金额 ÷ 数量（单价缺失时）
      *   ⑤ 只有金额             → 查数据库单价 → 反推数量；无库价则标待核对
      *   ⑥ 无金额               → 数量×单价算金额（最后手段）
-     *
-     * 合理性判断（isReasonableQty / isReasonablePrice）：
-     *   - 合理数量：整数、或 .0/.5 结尾的小数（如 1.5, 2.5, 0.5）
-     *     不合理：47.6, 190.4, 95.9184, 57.1429 这种明显是除法余数
-     *   - 合理单价：整数或 .5/.0 结尾，或在数据库价格 ±10% 范围内
      */
     reconcile(qty, price, amount, refPrice, tol) {
       tol = tol || 0.01;
@@ -181,36 +173,7 @@
       let review = false, note = '';
       const hasQ = U.ok(qty), hasP = U.ok(price), hasA = U.ok(amount);
 
-      // --- 辅助：判断数值是否像「合理的数量」---
-      function isReasonableQty(v) {
-        if (!U.ok(v) || v <= 0) return false;
-        if (v < 0.1) return false; // 采购数量不会小于 0.1
-        // 整数直接通过
-        if (v === Math.round(v)) return true;
-        // 允许 .0 / .5 结尾的常见小数（半份、1.5kg 等）
-        const rounded = Math.round(v * 10) / 10;
-        if (Math.abs(v - rounded) < 0.001 && (rounded * 10) % 5 === 0) return true;
-        // >= 0.5 的简单小数也放过
-        if (v >= 0.5 && v < 10 && v === Math.round(v * 2) / 2) return true;
-        return false;
-      }
-
-      // --- 辅助：判断数值是否像「合理的单价」---
-      function isReasonablePrice(v, ref) {
-        if (!U.ok(v) || v <= 0) return false;
-        // 整数或 .5 结尾
-        if (v === Math.round(v)) return true;
-        if (Math.abs(v - Math.round(v * 2) / 2) < 0.001) return true;
-        // 在数据库参考价 ±15% 内也认为合理
-        if (U.ok(ref) && Math.abs(v - ref) / Math.max(ref, 1) <= 0.15) return true;
-        return false;
-      }
-      function matchesRef(v) {
-        if (!U.ok(v) || !U.ok(refPrice)) return false;
-        return Math.abs(v - refPrice) / Math.max(refPrice, 1) <= 0.15;
-      }
-
-      // ===== 情况 ④：三值齐全 → 先一致性校验，不再无条件金额优先 =====
+      // ===== 情况 ①/②：三值齐全 → 一致性校验，不一致时保留 OCR 原始值并标记 =====
       if (hasQ && hasP && hasA) {
         const calcAmount = U.r2(qty * price);
         const diff = Math.abs(calcAmount - amount);
@@ -218,37 +181,9 @@
         if (relDiff <= tol || diff <= 0.02) {
           return { qty, price, amount, derived, review, note }; // 一致，全保留
         }
-        // 不一致：判断哪个最可能误读
-        const calcQty = U.r4(amount / price);
-        const calcPrice = U.r4(amount / qty);
-        const qtyReasonable = isReasonableQty(qty);
-        const priceReasonable = isReasonablePrice(price, refPrice);
-        const calcQtyReasonable = isReasonableQty(calcQty);
-        const calcPriceReasonable = isReasonablePrice(calcPrice, refPrice);
-        const priceMatchesRef = matchesRef(price);
-        const calcPriceMatchesRef = matchesRef(calcPrice);
-
-        if (qtyReasonable && priceMatchesRef && !calcQtyReasonable) {
-          // 数量、单价合理且单价匹配库价；按金额算出的数量不合理 → 金额错
-          amount = calcAmount; derived.push('amount');
-          note = `三值不一致：数量${U.fmt(qty)}、单价${U.fmt(price)}（匹配库价）合理，金额修正为数量×单价=${U.fmt(calcAmount)}`;
-          review = true;
-        } else if (qtyReasonable && calcPriceMatchesRef && !priceReasonable) {
-          // 数量合理，按金额÷数量得到的单价匹配库价 → 单价错
-          price = calcPrice; derived.push('price');
-          note = `三值不一致：数量${U.fmt(qty)}合理，单价修正为金额÷数量=${U.fmt(calcPrice)}（匹配库价）`;
-          review = true;
-        } else if (priceReasonable && calcQtyReasonable && !qtyReasonable) {
-          // 单价合理，按金额÷单价得到的数量合理 → 数量错
-          qty = calcQty; derived.push('qty');
-          note = `三值不一致：单价${U.fmt(price)}合理，数量修正为金额÷单价=${U.fmt(calcQty)}`;
-          review = true;
-        } else {
-          // 默认仍以金额为锚点，但标记待核对
-          qty = calcQty; derived.push('qty');
-          note = `三值不一致：按金额优先，数量修正为${U.fmt(calcQty)}，请核对原图`;
-          review = true;
-        }
+        // 不一致：以 OCR 为准，仅标记待核对
+        review = true;
+        note = `三值不一致：数量${U.fmt(qty)}×单价${U.fmt(price)}=${U.fmt(calcAmount)}，金额${U.fmt(amount)}，请按原始单据核对`;
         return { qty, price, amount, derived, review, note };
       }
 
@@ -265,14 +200,14 @@
         return { qty, price, amount, derived, review, note };
       }
 
-      // ===== 情况 ①：有金额+单价（没有数量）→ 以金额为准算数量 =====
+      // ===== 情况 ③：有金额+单价（没有数量）→ 以金额为准算数量 =====
       if (hasA && hasP) {
         qty = U.r4(amount / price); derived.push('qty');
         note = '数量 = 金额 ÷ 单价';
         return { qty, price, amount, derived, review, note };
       }
 
-      // ===== 情况 ②：有金额+数量（没有单价）→ 以金额为准算单价 =====
+      // ===== 情况 ④：有金额+数量（没有单价）→ 以金额为准算单价 =====
       if (hasA && hasQ && !hasP) {
         price = U.r4(amount / qty); derived.push('price');
         note = '单价 = 金额 ÷ 数量';
@@ -370,52 +305,15 @@
       row.qty = rc.qty; row.price = rc.price; row.amount = rc.amount;
       row.flags.derived = rc.derived;
 
-      // ★ 数据库单价校验（抓出 OCR 数量/单价对调或误读）
-      // 场景：OCR 把 qty=1/price=476 读成 qty=47.6/price=10，数学上 47.6×10=476 一致，
-      //       但数据库显示该品名单价应在 470~480 附近 → 判定单价被误读，用金额反推修正
+      // ★ 数据库单价校验（仅作提示，不覆盖 OCR 识别结果）
+      // 用户要求「以识别的单据为准，校验为辅」，因此当 OCR 单价与数据库参考价偏差较大时，
+      // 只标记待核对并给出提示，不自动修正数量或单价。
       if (U.ok(row.amount) && U.ok(mn.price) && U.ok(row.price)) {
         const priceDev = Math.abs(row.price - mn.price) / Math.max(mn.price, 1);
-        // 当前单价与数据库单价偏差超过 20% → 高度疑似 OCR 读错/对调
         if (priceDev > 0.20) {
-          // 尝试用金额÷库单价 得到数量，看是否更合理
-          const dbQty = U.r4(row.amount / mn.price);
-          const altPrice = U.r4(row.amount / row.qty); // 用金额÷当前数量得备选单价
-          const altPriceDev = U.ok(altPrice) ? Math.abs(altPrice - mn.price) / Math.max(mn.price, 1) : 999;
-
-          // 如果「金额÷数量」得到的单价更接近数据库价 → 说明数量对了、单价错了
-          if (altPriceDev < priceDev && altPriceDev <= 0.15) {
-            row.price = altPrice;
-            if (!row.flags.derived.includes('price')) row.flags.derived.push('price');
-            row.flags.review = true;
-            row.flags.note = (row.flags.note ? row.flags.note + '；' : '') +
-              `数据库校验：原单价${U.fmt(rc.price)}与库价${U.fmt(mn.price)}偏差过大，` +
-              `已按金额÷数量修正为${U.fmt(altPrice)}`;
-          }
-          // 否则如果「金额÷库单价」得到的数量是合理整数/简单小数 → 说明单价对了、数量错了
-          else if (this._isNiceQty(dbQty) && dbQty >= 0.1) {
-            row.qty = dbQty; row.price = mn.price;
-            if (!row.flags.derived.includes('qty')) row.flags.derived.push('qty');
-            if (!row.flags.derived.includes('price')) row.flags.derived.push('price');
-            row.flags.review = true;
-            row.flags.note = (row.flags.note ? row.flags.note + '；' : '') +
-              `数据库校验：原数量${U.fmt(rc.qty)}/单价${U.fmt(rc.price)}与库价${U.fmt(mn.price)}不符，` +
-              `已按金额÷库单价修正为 qty=${U.fmt(dbQty)}/price=${U.fmt(mn.price)}`;
-          }
-          // 兜底：dbQty 接近整数（浮点误差）→ 也算合理，直接取整
-          else if (U.ok(dbQty) && Math.abs(dbQty - Math.round(dbQty)) < 0.1) {
-            row.qty = Math.round(dbQty); row.price = mn.price;
-            if (!row.flags.derived.includes('qty')) row.flags.derived.push('qty');
-            if (!row.flags.derived.includes('price')) row.flags.derived.push('price');
-            row.flags.review = true;
-            row.flags.note = (row.flags.note ? row.flags.note + '；' : '') +
-              `数据库校验：按金额÷库单价修正为 qty=${Math.round(dbQty)}/price=${U.fmt(mn.price)}（接近整数）`;
-          }
-          // 两种都不够确定 → 标待核对
-          else {
-            row.flags.review = true;
-            row.flags.note = (row.flags.note ? row.flags.note + '；' : '') +
-              `⚠ 单价${U.fmt(row.price)}与数据库参考价${U.fmt(mn.price)}差异较大，请核对原始单据`;
-          }
+          row.flags.review = true;
+          row.flags.note = (row.flags.note ? row.flags.note + '；' : '') +
+            `单价${U.fmt(row.price)}与数据库参考价${U.fmt(mn.price)}差异较大，请核对原始单据`;
         }
       }
 
