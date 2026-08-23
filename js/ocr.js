@@ -239,6 +239,36 @@
     return { radius: radius, imgData: imgData };
   }
 
+  function buildContext(items, cats, limitPerCat) {
+    limitPerCat = limitPerCat || 55;
+    var byCat = new Map();
+    (items || []).forEach(function (it) {
+      if (!byCat.has(it.cat)) byCat.set(it.cat, []);
+      byCat.get(it.cat).push(it);
+    });
+    var lines = [];
+    var order = (cats && cats.length ? cats : Array.from(byCat.keys()));
+    order.forEach(function (c) {
+      var arr = byCat.get(c);
+      if (!arr || !arr.length) return;
+      arr.sort(function (a, b) { return (b.n || 0) - (a.n || 0); });
+      var names = arr.slice(0, limitPerCat).map(function (it) {
+        return U.ok(it.ref) ? it.name + '(' + U.fmt(it.ref) + ')' : it.name;
+      });
+      lines.push('\u3010' + c + '\u3011' + names.join('\u3001'));
+    });
+    byCat.forEach(function (arr, c) {
+      if (order.indexOf(c) >= 0) return;
+      arr.sort(function (a, b) { return (b.n || 0) - (a.n || 0); });
+      lines.push('\u3010' + c + '\u3011' + arr.slice(0, limitPerCat).map(function (it) {
+        return U.ok(it.ref) ? it.name + '(' + U.fmt(it.ref) + ')' : it.name;
+      }).join('\u3001'));
+    });
+    var txt = lines.join('\n');
+    if (txt.length > 9000) txt = txt.slice(0, 9000) + '\n\u2026\uff08\u5df2\u622a\u65ad\uff09';
+    return txt;
+  }
+
   function buildPrompt(ctx, cats, hintDate, hintCat, isMobile) {
     const catsStr = (cats || []).join('、') || '（无）';
     const ctxStr = ctx || '（暂无历史数据）';
