@@ -502,7 +502,53 @@
 
     /* ---------- 批量处理 ---------- */
     processAll(rows, cfg, defMonth) {
-      return rows.map(r => this.processRow(r, cfg, defMonth));
+      const out = rows.map(r => this.processRow(r, cfg, defMonth));
+      return this.detectSerial(out);
+    },
+
+    /* ---------- 同单据串行/重复检测 ----------
+     * 行与行之间数字串读是高频错误：A 行的金额跑到 B 行金额位、B 行数量跑到 C 行。
+     * 这里只做「疑似」标记（review=true），提示人工核对，绝不自动改写，避免二次破坏。
+     * 检测（同一张照片内的相邻行）：
+     *   ① 当前行 amount ≈ 上一行 price×100（精确）→ 极可能把上一行单价格抄到了金额列（分单位）；
+     *   ② 当前行 amount ≈ 上一行 price（都是元级小数，误差<0.01）→ 把上一行单价抄到了金额列；
+     *   ③ 相邻两行 amount 完全相同且都为整数、数量都为 1 → 可能复制串行。
+     */
+    detectSerial(rows) {
+      const groups = new Map();
+      rows.forEach((r, i) => {
+        const k = r.photo || ('__s' + i);
+        if (!groups.has(k)) groups.set(k, []);
+        groups.get(k).push(r);
+      });
+      groups.forEach(grp => {
+        for (let i = 1; i < grp.length; i++) {
+          const cur = grp[i], prev = grp[i - 1];
+          if (U.ok(cur.amount) && cur.amount >= 100 && U.ok(prev.price) && prev.price > 0) {
+            const expected = prev.price * 100;
+            if (Math.abs(cur.amount - expected) < 0.5) {
+              cur.flags.review = true;
+              cur.flags.note = (cur.flags.note ? cur.flags.note + '；' : '') +
+                `金额${U.fmt(cur.amount)}≈上一行单价${U.fmt(prev.price)}×100，疑似行错位，请核对原单`;
+            }
+          }
+          if (U.ok(cur.amount) && cur.amount < 100 && U.ok(prev.price) && prev.price < 100 &&
+              Math.abs(cur.amount - prev.price) < 0.01) {
+            cur.flags.review = true;
+            cur.flags.note = (cur.flags.note ? cur.flags.note + '；' : '') +
+              `金额${U.fmt(cur.amount)}与上一行单价${U.fmt(prev.price)}相同，疑似列错位，请核对原单`;
+          }
+          if (U.ok(cur.amount) && U.ok(prev.amount) && cur.amount >= 100 &&
+              Math.abs(cur.amount - prev.amount) < 0.005 &&
+              U.ok(cur.qty) && Math.abs(cur.qty - 1) < 0.05 &&
+              U.ok(prev.qty) && Math.abs(prev.qty - 1) < 0.05) {
+            cur.flags.review = true;
+            cur.flags.note = (cur.flags.note ? cur.flags.note + '；' : '') +
+              `相邻行金额完全相同(${U.fmt(cur.amount)})，疑似串行复制，请核对原单`;
+          }
+        }
+      });
+      return rows;
     },
 
     /* ---------- 同日期同名合并 ----------
