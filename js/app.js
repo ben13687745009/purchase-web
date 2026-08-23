@@ -25,6 +25,9 @@
     },
 
     async init() {
+      if (!U || !S || !M || !IMP || !OCR || !EXP) {
+        throw new Error('核心脚本未加载完整，请按 Ctrl+F5 强制刷新，或检查浏览器扩展是否拦截了 js/ocr.js');
+      }
       await S.init();
       this.items = await S.allItems();
       M.buildIndex(this.items);
@@ -330,7 +333,7 @@
         const isMobile = p.source === 'mobile';
         const dataUrl = isMobile
           ? await OCR.compressForMobile(p.file, api.maxw || 1600)
-          : await OCR.compress(p.file, api.maxw || 1800);
+          : await OCR.compress(p.file, api.maxw || 2200);
 
         // ★ 手机端模型可由用户在设置页「手机端模型」自行填写；
         //   留空时手机端跟随电脑端模型（api.model）保持一致
@@ -943,6 +946,11 @@
         toast('已保存', 'ok'); this.renderThumbs();
       };
       $('#btnTestApi').onclick = async () => {
+        if (!OCR || !OCR.test) {
+          $('#apiMsg').textContent = '✗ OCR 模块未加载，请按 Ctrl+F5 强制刷新';
+          toast('OCR 模块未加载', 'err');
+          return;
+        }
         const api = {
           base: $('#apiBase').value.trim(), model: $('#apiModel').value.trim(),
           key: $('#apiKey').value.trim(), proxy: $('#apiProxy').value.trim()
