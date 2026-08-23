@@ -362,7 +362,27 @@
         }
       }
 
-      // 4. 数据库价存在但当前单价仍偏差大：用数据库价覆盖
+      // ★ 4. 异常：金额 ≈ 单价²（OCR 把金额列误填成 price×qty 或列错位的典型特征）
+      // 例如 price=4.14, amount=17.13 → amount/price=4.1377≈price。
+      if (U.ok(row.price) && U.ok(row.amount) && row.price > 0) {
+        const ratio = row.amount / row.price;
+        if (Math.abs(ratio - row.price) / Math.max(row.price, 0.01) < 0.08) {
+          const badAmount = row.amount;
+          // 单价是小数且数量≈1 → 真实金额大概率是 price×100（如 4.14→414）
+          if (U.ok(row.qty) && row.qty >= 0.95 && row.qty <= 1.05 && row.price < 10) {
+            row.amount = U.r2(row.price * 100);
+            fixNotes.push(`金额${U.fmt(badAmount)}≈单价²，判定列错位；已按单价×100修正为${U.fmt(row.amount)}`);
+          } else {
+            // 否则清空金额，让 reconcile 用 qty×price 重算
+            row.amount = null;
+            fixNotes.push(`金额${U.fmt(badAmount)}≈单价²，判定列错位；已清空并按数量×单价重算`);
+          }
+          if (row.flags.derived.indexOf('amount') < 0) row.flags.derived.push('amount');
+          row.flags.review = true;
+        }
+      }
+
+      // 5. 数据库价存在但当前单价仍偏差大：用数据库价覆盖
       if (U.ok(mn.price) && U.ok(row.price) && Math.abs(row.price - mn.price) / Math.max(mn.price, 1) > 0.20) {
         row.price = mn.price;
         if (row.flags.derived.indexOf('price') < 0) row.flags.derived.push('price');
