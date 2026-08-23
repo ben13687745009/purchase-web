@@ -22,7 +22,7 @@
     '裕笙隆': ['豆豉', '酱', '味露', '鱼露', '吉士粉', '咖喱粉', '黄姜粉', '辣鲜露', '双蒸酒', '酸青瓜', '沙律']
   };
 
-// 常见手写短名（笔画少、极易误读）：在 fuzzy 匹配时放宽阈值
+  // 常见手写短名（笔画少、极易误读）：在 fuzzy 匹配时放宽阈值
   const COMMON_SHORT_NAMES = [
     '肉眼','肉碎','上肉碎','花肉','梅肉','排骨','牛肉片','牛肉','鸡胸','猪肚',
     '菜心','生菜','西兰花','青瓜','番茄','洋葱','土豆','姜','蒜','葱',
@@ -32,6 +32,18 @@
     '长方盒','正方盒','打包盒','筷子','手套','杯','盖',
     '黑椒汁','烧汁','茄汁','咖喱汁','瑞士汁','糖醋汁','肉酱'
   ];
+
+  // 常见 OCR 错字纠正：把高频误读映射回标准名称
+  const TYPOS = {
+    '咖士汁': '瑞士汁',
+    '咖土汁': '瑞士汁',
+    '黑淑': '黑椒汁',
+    '黑淑汁': '黑椒汁',
+    '冬荫功': '冬阴功',
+    '冬荫功酱': '冬阴功',
+    '咖哩': '咖喱',
+    '咖哩汁': '咖喱汁'
+  };
 
   const M = {
     /* 商品库索引：{ byKey: Map, byCat: Map<cat, [item]>, all: [] } */
@@ -187,8 +199,8 @@
         // 有金额+单价 → 数量 = 金额 ÷ 单价
         if (U.ok(p)) {
           // ★ 金额单位「分」检测：送货单金额列常写「分」（如 414 分 = 4.14 元）。
-          // 典型特征：金额 ÷ 单价 ≈ 100 的整数倍（1×100、2×100…），且单价为小数。
-          if (a >= 100 && p > 0 && p < 10) {
+          // 典型特征：金额 ÷ 单价 ≈ 100 的整数倍（1×100、2×100…），且单价为合理采购价。
+          if (a >= 100 && p > 0 && p < 100) {
             const fenRatio = a / p;
             if (fenRatio >= 50) {
               const candidateQty = Math.round(fenRatio / 100);
@@ -295,11 +307,19 @@
       const forceCat = raw.forceCat || '';
       // 拆分单位：OCR 可能把「箱/包」等塞进 name
       const nameUnit = this._splitUnit(raw.name, raw.unit);
+      // 常见错字纠正（必须在 matchName 之前做，否则 fuzzy 可能越走越远）
+      let fixedName = nameUnit.name;
+      for (const bad in TYPOS) {
+        if (U.normName(fixedName) === U.normName(bad)) {
+          fixedName = TYPOS[bad];
+          break;
+        }
+      }
       const row = {
         id: raw.id || U.uid(),
         date: U.parseDate(raw.date, defMonth),
         cat: forceCat || raw.cat || '',
-        name: nameUnit.name,
+        name: fixedName,
         unit: nameUnit.unit,
         qty: U.toNum(raw.qty),
         price: U.toNum(raw.price),
@@ -413,6 +433,32 @@
       row.qty = rc.qty; row.price = rc.price; row.amount = rc.amount;
       row.flags.derived = rc.derived;
       if (rc.note) fixNotes.push(rc.note);
+
+      // ★ 最终兜底：单价仍 ≥ 100 时，餐饮采购几乎不可能，强制修正
+      if (U.ok(row.price) && row.price >= 100) {
+        const badPrice = row.price;
+        if (U.ok(mn.price)) {
+          row.price = mn.price;
+          fixNotes.push(`兜底修正：单价${U.fmt(badPrice)}仍≥100，按商品库价改为${U.fmt(mn.price)}`);
+        } else {
+          row.price = U.r4(badPrice / 100);
+          fixNotes.push(`兜底修正：单价${U.fmt(badPrice)}仍≥100，按漏小数点改为${U.fmt(row.price)}`);
+        }
+        if (row.flags.derived.indexOf('price') < 0) row.flags.derived.push('price');
+        row.flags.review = true;
+      }
+
+      // 金额仍 ≥ 100 且单价合理：也按「分」或漏小数点兜底
+      if (U.ok(row.amount) && row.amount >= 100 && U.ok(row.price) && row.price < 100) {
+        const calcQ = row.amount / row.price;
+        if (!this._isNiceQty(calcQ)) {
+          const badAmount = row.amount;
+          row.amount = U.r2(badAmount / 100);
+          fixNotes.push(`兜底修正：金额${U.fmt(badAmount)}与单价${U.fmt(row.price)}无法得到合理数量，按漏小数点/分改为${U.fmt(row.amount)}`);
+          if (row.flags.derived.indexOf('amount') < 0) row.flags.derived.push('amount');
+          row.flags.review = true;
+        }
+      }
 
       row.flags.review = mn.review || rc.review || row.flags.review;
       if (nameUnit.unit) fixNotes.unshift(`单位「${nameUnit.unit}」已从名称拆分`);

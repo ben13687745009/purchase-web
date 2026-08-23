@@ -44,6 +44,40 @@
           cx.fillRect(0, 0, w, h);
           cx.drawImage(bitmap, 0, 0, w, h);
           if (bitmap.close) try { bitmap.close(); } catch (e) { }
+
+          // 电脑端只做轻量对比度拉伸：看清淡字和小数点，不锐化、不加粗、不改笔画
+          var imgData = cx.getImageData(0, 0, w, h);
+          var d = imgData.data;
+          var minV = 255, maxV = 0;
+          for (var i = 0; i < d.length; i += 4) {
+            var g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+            if (g < minV) minV = g;
+            if (g > maxV) maxV = g;
+          }
+          var range = Math.max(20, maxV - minV); // 避免除0，最小拉伸20
+          var lo = minV + range * 0.02; // 去除少量极暗噪点
+          var hi = maxV - range * 0.02; // 去除少量极亮背景
+          var span = Math.max(1, hi - lo);
+          for (var j = 0; j < d.length; j += 4) {
+            for (var c = 0; c < 3; c++) {
+              var v = d[j + c];
+              v = Math.round((v - lo) / span * 255);
+              d[j + c] = Math.max(0, Math.min(255, v));
+            }
+          }
+          cx.putImageData(imgData, 0, 0);
+
+          // 竖拍单据转正
+          if (h > w * 1.3) {
+            var rotCv = document.createElement('canvas');
+            rotCv.width = h; rotCv.height = w;
+            var rcx = rotCv.getContext('2d');
+            rcx.translate(h, 0);
+            rcx.rotate(Math.PI / 2);
+            rcx.drawImage(cv, 0, 0);
+            cv = rotCv; cx = rcx;
+          }
+
           cleanup();
           res(cv.toDataURL('image/jpeg', 0.95));
         } catch (e) { cleanup(); rej(e); }
@@ -356,6 +390,9 @@ C. 金额列如果模糊、被涂改或只写了一半（如冬菇金额仅写�
 第一步：先数表格有多少行商品数据（不含表头），看序号列最后一个数 N，记住 N。
 第二步：按 1、2、3…N 顺序逐行提取，items 必须恰好 N 个，不跳行、不并两行为一、不把表头当数据行。打印密集表格行距小最易漏，请逐条对准网格线。
 【手写数字陷阱】序号列不是金额；同一单金额量级应相近，某行明显小一个量级很可能是小数点读错；不要把金额列数字误填到数量列；不要把单价列数字误填到数量列；金额列出现 17.13/24.5/9.36 这种「约等于单价平方」的数字时，100% 是列错位，必须回到原图重新读取金额列的三位整数。
+【防漏行——必须执行】本单若有 4 行商品（如咖喱、瑞士汁、黑椒汁/黑椒、冬阴功），必须输出恰好 4 个 item，一行都不能少。每行只要有名称或数字就必须输出；字迹再淡也不能跳过。输出前请再次核对：原图有几行数据？我输出了几个 item？数量必须相等。
+【常见汁水品名】单据中的「瑞士汁」「咖喱汁」「黑椒汁」「茄汁」「烧汁」「冬阴功」「肉酱」等名称必须逐字辨认，不要把「瑞士汁」误读成「咖士汁」，不要把「黑椒」漏掉「汁」字，不要把「冬阴功」误读成其他酱名。
+【单价大数强制修正】如果原图单价列看起来像 306、516、495、414、485、390、385 等 ≥100 的整数，而你从商品库参考中看到同款单价是 3.06、5.16、4.95、4.14、4.85、3.90、3.85 等，则必须输出带小数点的正确单价；数据库价优先，无数据库价则把整数除以 100。输出前自检：该商品单价是否符合 1~50 的餐饮采购常识？若不符合，立即修正。
 【手写汉字品名】逐笔画辨认，不要只看大概；常见误读（实↔深、冬↔冻、耳↔鱼、边↔过）请额外小心；鲜肉短名如「肉眼/肉碎/上肉碎/花肉/梅肉」、蔬菜短名如「菜心/生菜/西蓝花」、粮油短名如「冬菇/砂糖/幼砂糖」极易混淆，请对照上下文和单价谨慎判断。${hintDateStr}${hintCatStr}`;
   }
 
