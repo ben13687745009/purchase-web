@@ -330,7 +330,7 @@
         const isMobile = p.source === 'mobile';
         const dataUrl = isMobile
           ? await OCR.compressForMobile(p.file, api.maxw || 1600)
-          : await OCR.compress(p.file, api.maxw || 1800);
+          : await OCR.compress(p.file, api.maxw || 2200);
 
         // ★ 手机端模型可由用户在设置页「手机端模型」自行填写；
         //   留空时手机端跟随电脑端模型（api.model）保持一致
