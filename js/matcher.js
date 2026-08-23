@@ -186,14 +186,32 @@
       if (hasA) {
         // 有金额+单价 → 数量 = 金额 ÷ 单价
         if (U.ok(p)) {
+          // ★ 金额单位「分」检测：送货单金额列常写「分」（如 414 分 = 4.14 元）。
+          // 典型特征：金额 ÷ 单价 ≈ 100 的整数倍（1×100、2×100…），且单价为小数。
+          if (a >= 100 && p > 0 && p < 10) {
+            const fenRatio = a / p;
+            if (fenRatio >= 50) {
+              const candidateQty = Math.round(fenRatio / 100);
+              const expectedFen = candidateQty * p * 100;
+              if (candidateQty >= 1 && candidateQty <= 50 &&
+                  Math.abs(a - expectedFen) / Math.max(expectedFen, 1) < 0.02) {
+                // 金额单位为分：换算成元
+                a = U.r2(a / 100);
+                derived.push('amount');
+                note = `金额${U.fmt(amount)}为「分」（${candidateQty}×${U.fmt(p)}×100），已换算为元：${U.fmt(a)}`;
+                amount = a;
+                review = true;
+              }
+            }
+          }
           const calcQ = U.r4(a / p);
           if (!isNiceQty(calcQ) && isNiceQty(q) && Math.abs(q - calcQ) / Math.max(calcQ, 1) > 0.10) {
             // 计算出的数量明显不合理，但 OCR 数量合理：保留 OCR 数量并标记
             review = true;
-            note = `金额${U.fmt(a)}÷单价${U.fmt(p)}=${U.fmt(calcQ)} 不合理，保留识别数量${U.fmt(q)}，请核对`;
+            note = (note ? note + '；' : '') + `金额${U.fmt(a)}÷单价${U.fmt(p)}=${U.fmt(calcQ)} 不合理，保留识别数量${U.fmt(q)}，请核对`;
           } else {
             q = calcQ; derived.push('qty');
-            note = '数量 = 金额 ÷ 单价';
+            note = (note ? note + '；' : '') + '数量 = 金额 ÷ 单价';
           }
           return { qty: q, price: p, amount: a, derived, review, note };
         }
