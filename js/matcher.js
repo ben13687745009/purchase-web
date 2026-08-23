@@ -100,14 +100,14 @@
 
       const nraw = U.normName(raw);
 
-      // b. 精确
+      // b. 精确：直接采用商品库标准单价（用户规则：匹配成功优先复用数据库价）
       if (cat) {
         const hit = this.idx.byKey.get(cat + '|' + nraw);
-        if (hit) { out.name = hit.name; out.price = U.ok(price) ? price : hit.ref; out.score = 1; out.source = 'exact'; out.cat = hit.cat; return out; }
+        if (hit) { out.name = hit.name; out.price = U.ok(hit.ref) ? hit.ref : price; out.score = 1; out.source = 'exact'; out.cat = hit.cat; return out; }
       } else {
         for (const it of this.idx.all) {
           if (U.normName(it.name) === nraw) {
-            out.name = it.name; out.price = U.ok(price) ? price : it.ref; out.score = 1; out.source = 'exact'; out.cat = it.cat; return out;
+            out.name = it.name; out.price = U.ok(it.ref) ? it.ref : price; out.score = 1; out.source = 'exact'; out.cat = it.cat; return out;
           }
         }
       }
@@ -115,7 +115,7 @@
       // c. 别名精确命中
       for (const it of pool) {
         if (it.alias && it.alias.some(a => U.normName(a) === nraw)) {
-          out.name = it.name; out.price = U.ok(price) ? price : it.ref; out.score = 1; out.source = 'alias'; out.cat = it.cat; return out;
+          out.name = it.name; out.price = U.ok(it.ref) ? it.ref : price; out.score = 1; out.source = 'alias'; out.cat = it.cat; return out;
         }
       }
 
@@ -140,12 +140,12 @@
       });
 
       if (best && bs >= thAuto) {
-        out.name = best.name; out.price = U.ok(price) ? price : best.ref; out.score = bs;
+        out.name = best.name; out.price = U.ok(best.ref) ? best.ref : price; out.score = bs;
         out.source = bs >= 0.999 ? 'exact' : 'fuzzy'; out.cat = best.cat;
         return out;
       }
       if (best && bs >= thRev) {
-        out.name = best.name; out.price = U.ok(price) ? price : best.ref; out.score = bs;
+        out.name = best.name; out.price = U.ok(best.ref) ? best.ref : price; out.score = bs;
         out.source = 'fuzzy-low'; out.review = true; out.cat = best.cat;
         return out;
       }
@@ -154,87 +154,87 @@
       return out;
     },
 
-    /* ---------- 三缺一反推（以 OCR 识别为准，校验为辅）----------
+    /* ---------- 三缺一反推（金额优先 + 数据库单价优先）----------
      *
-     * 核心原则：OCR 识别出的数量、单价、金额优先保留；校验只用于补全缺失字段
-     * 或标记明显矛盾，不主动覆盖 OCR 已识别出的合理数值。
-     *
-     * 策略：
-     *   ① 三值齐全且一致       → 全部保留
-     *   ② 三值齐全但不一致     → 保留 OCR 原始值，标记待核对（不自动修正）
-     *   ③ 有金额+单价          → 数量 = 金额 ÷ 单价（数量缺失时）
-     *   ④ 有金额+数量          → 单价 = 金额 ÷ 数量（单价缺失时）
-     *   ⑤ 只有金额             → 查数据库单价 → 反推数量；无库价则标待核对
-     *   ⑥ 无金额               → 数量×单价算金额（最后手段）
+     * 核心原则：
+     *   1. 金额（amount）以单据原图为准，最高优先级。
+     *   2. 品名匹配到商品库时，优先采用数据库标准单价；单价 ≥ 100 视为漏小数点。
+     *   3. 数量由「金额 ÷ 单价」反推，并与 OCR 识别出的数量做合理性比对。
+     *   4. 三值齐全但不一致时，以金额和数据库单价为准修正，并标记待核对。
      */
     reconcile(qty, price, amount, refPrice, tol) {
-      tol = tol || 0.01;
+      tol = tol || 0.02;
       const derived = [];
       let review = false, note = '';
-      const hasQ = U.ok(qty), hasP = U.ok(price), hasA = U.ok(amount);
+      let q = qty, p = price, a = amount;
+      const hasQ = U.ok(q), hasP = U.ok(p), hasA = U.ok(a);
 
-      // ===== 情况 ①/②：三值齐全 → 一致性校验，不一致时保留 OCR 原始值并标记 =====
-      if (hasQ && hasP && hasA) {
-        const calcAmount = U.r2(qty * price);
-        const diff = Math.abs(calcAmount - amount);
-        const relDiff = diff / Math.max(Math.abs(amount), 1e-9);
-        if (relDiff <= tol || diff <= 0.02) {
-          return { qty, price, amount, derived, review, note }; // 一致，全保留
-        }
-        // 不一致：以 OCR 为准，仅标记待核对
-        review = true;
-        note = `三值不一致：数量${U.fmt(qty)}×单价${U.fmt(price)}=${U.fmt(calcAmount)}，金额${U.fmt(amount)}，请按原始单据核对`;
-        return { qty, price, amount, derived, review, note };
+      function isNiceQty(v) {
+        if (!U.ok(v) || v <= 0) return false;
+        if (v < 0.1) return false;
+        if (Math.abs(v - Math.round(v)) < 0.05) return true;
+        if (v < 50 && Math.abs(v - Math.round(v * 2) / 2) < 0.05) return true;
+        return false;
       }
 
-      // ===== 情况 ⑤：只有金额 =====
-      if (hasA && !hasQ && !hasP) {
+      // 优先采用数据库参考价（调用方已处理过大数，这里只做兜底）
+      if (U.ok(refPrice) && (!hasP || p >= 100 || Math.abs(p - refPrice) / Math.max(refPrice, 1) > 0.20)) {
+        p = refPrice; derived.push('price');
+      }
+
+      // ===== 有金额 =====
+      if (hasA) {
+        // 有金额+单价 → 数量 = 金额 ÷ 单价
+        if (U.ok(p)) {
+          const calcQ = U.r4(a / p);
+          if (!isNiceQty(calcQ) && isNiceQty(q) && Math.abs(q - calcQ) / Math.max(calcQ, 1) > 0.10) {
+            // 计算出的数量明显不合理，但 OCR 数量合理：保留 OCR 数量并标记
+            review = true;
+            note = `金额${U.fmt(a)}÷单价${U.fmt(p)}=${U.fmt(calcQ)} 不合理，保留识别数量${U.fmt(q)}，请核对`;
+          } else {
+            q = calcQ; derived.push('qty');
+            note = '数量 = 金额 ÷ 单价';
+          }
+          return { qty: q, price: p, amount: a, derived, review, note };
+        }
+        // 有金额无单价 → 用数据库价 或 金额÷数量
         if (U.ok(refPrice)) {
-          price = refPrice; derived.push('price');
-          qty = U.r4(amount / price); derived.push('qty');
-          note = '仅有金额，单价取自商品库(' + U.fmt(refPrice) + ')，数量=金额÷单价';
+          p = refPrice; derived.push('price');
+          q = U.r4(a / p); derived.push('qty');
+          note = '单价取自商品库(' + U.fmt(refPrice) + ')，数量=金额÷单价';
           review = true;
-        } else {
-          review = true; note = '仅有金额且商品库无参考价，无法反推数量和单价';
+          return { qty: q, price: p, amount: a, derived, review, note };
         }
-        return { qty, price, amount, derived, review, note };
+        if (isNiceQty(q)) {
+          p = U.r4(a / q); derived.push('price');
+          note = '单价 = 金额 ÷ 数量';
+          return { qty: q, price: p, amount: a, derived, review, note };
+        }
+        review = true; note = '仅有金额，缺少单价和数量，无法反推';
+        return { qty: q, price: p, amount: a, derived, review, note };
       }
 
-      // ===== 情况 ③：有金额+单价（没有数量）→ 以金额为准算数量 =====
-      if (hasA && hasP) {
-        qty = U.r4(amount / price); derived.push('qty');
-        note = '数量 = 金额 ÷ 单价';
-        return { qty, price, amount, derived, review, note };
-      }
-
-      // ===== 情况 ④：有金额+数量（没有单价）→ 以金额为准算单价 =====
-      if (hasA && hasQ && !hasP) {
-        price = U.r4(amount / qty); derived.push('price');
-        note = '单价 = 金额 ÷ 数量';
-        return { qty, price, amount, derived, review, note };
-      }
-
-      // ===== 情况 ⑥：没有金额 =====
+      // ===== 无金额 =====
       if (!hasA) {
-        if (hasQ && hasP) {
-          amount = U.r2(qty * price); derived.push('amount');
+        if (U.ok(q) && U.ok(p)) {
+          a = U.r2(q * p); derived.push('amount');
           note = '金额 = 数量 × 单价（无原始金额，计算得出）';
-        } else if (hasQ && U.ok(refPrice)) {
-          price = refPrice; derived.push('price');
-          amount = U.r2(qty * price); derived.push('amount');
+        } else if (U.ok(q) && U.ok(refPrice)) {
+          p = refPrice; derived.push('price');
+          a = U.r2(q * p); derived.push('amount');
           note = '单价取自商品库，金额 = 数量 × 单价';
           review = true;
-        } else if (hasP) {
+        } else if (U.ok(p)) {
           review = true; note = '仅有单价，缺少数量和金额';
-        } else if (hasQ) {
+        } else if (U.ok(q)) {
           review = true; note = '仅有数量，缺少单价和金额';
         } else {
           review = true; note = '数量/单价/金额均未识别';
         }
-        return { qty, price, amount, derived, review, note };
+        return { qty: q, price: p, amount: a, derived, review, note };
       }
 
-      return { qty, price, amount, derived, review, note };
+      return { qty: q, price: p, amount: a, derived, review, note };
     },
 
     /* ---------- 辅助：判断数量是否像「合理的手写数量」----------
@@ -256,23 +256,43 @@
       return false;
     },
 
+    /* ---------- 从名称末尾拆分单位 ---------- */
+    _splitUnit(name, rawUnit) {
+      if (rawUnit) return { name: String(name || '').trim(), unit: String(rawUnit).trim() };
+      const units = ['箱','包','袋','盒','罐','瓶','支','件','个','份','套','条','只','扎','桶','升','斤','两','磅','kg','g','ml','l','千克','克','毫升','KG','ML','L'];
+      let n = String(name || '').trim();
+      let u = '';
+      for (const un of units) {
+        if (n.endsWith(un)) {
+          u = un;
+          n = n.slice(0, -un.length).trim();
+          break;
+        }
+      }
+      return { name: n, unit: u };
+    },
+
     /* ---------- 单行完整处理 ---------- */
     processRow(raw, cfg, defMonth) {
       const forceCat = raw.forceCat || '';
+      // 拆分单位：OCR 可能把「箱/包」等塞进 name
+      const nameUnit = this._splitUnit(raw.name, raw.unit);
       const row = {
         id: raw.id || U.uid(),
         date: U.parseDate(raw.date, defMonth),
         cat: forceCat || raw.cat || '',
-        name: String(raw.name || '').trim(),
+        name: nameUnit.name,
+        unit: nameUnit.unit,
         qty: U.toNum(raw.qty),
         price: U.toNum(raw.price),
         amount: U.toNum(raw.amount),
         src: raw.src || 'manual',
         photo: raw.photo || '',
-        rawName: String(raw.name || '').trim(),
+        rawName: nameUnit.name,
         seq: raw.seq || 0,
         flags: { derived: [], nameSrc: '', score: 0, review: false, note: '' }
       };
+      const rawQty = row.qty, rawPrice = row.price, rawAmount = row.amount;
 
       // 每日汇总行（如环绿蔬菜）：数量列是「商品品种数」，不参与单价/金额反推
       if (raw.daily) {
@@ -294,35 +314,75 @@
         if (row.cat && cfg.cats && cfg.cats.indexOf(row.cat) < 0) row.cat = '';
       }
 
-      // 品名匹配（仅标准化名称/补全单价，不回填分类）
+      // 品名匹配（匹配成功后优先复用数据库标准单价）
       const mn = this.matchName(row.name, row.cat, row.price, cfg);
       if (mn.name && mn.name !== row.name) row.name = mn.name;
       row.flags.nameSrc = mn.source;
       row.flags.score = U.r2(mn.score);
 
-      // 反推（金额优先）
-      const rc = this.reconcile(row.qty, row.price, row.amount, mn.price, cfg.tol);
-      row.qty = rc.qty; row.price = rc.price; row.amount = rc.amount;
-      row.flags.derived = rc.derived;
+      // ★ 大数/列错位修正（在 reconcile 之前）
+      // 餐饮采购单价几乎都在 1~50，≥100 视为漏小数点；数量≥100 视为列错位或也漏小数点。
+      const fixNotes = [];
 
-      // ★ 数据库单价校验（仅作提示，不覆盖 OCR 识别结果）
-      // 用户要求「以识别的单据为准，校验为辅」，因此当 OCR 单价与数据库参考价偏差较大时，
-      // 只标记待核对并给出提示，不自动修正数量或单价。
-      if (U.ok(row.amount) && U.ok(mn.price) && U.ok(row.price)) {
-        const priceDev = Math.abs(row.price - mn.price) / Math.max(mn.price, 1);
-        if (priceDev > 0.20) {
+      // 1. 单价 ≥ 100：漏小数点，优先用数据库价，否则除以 100
+      if (U.ok(rawPrice) && rawPrice >= 100) {
+        if (U.ok(mn.price)) {
+          row.price = mn.price;
+          fixNotes.push(`单价${U.fmt(rawPrice)}按商品库参考价修正为${U.fmt(mn.price)}`);
+        } else {
+          row.price = U.r4(rawPrice / 100);
+          fixNotes.push(`单价${U.fmt(rawPrice)}按漏小数点修正为${U.fmt(row.price)}`);
+        }
+        if (row.flags.derived.indexOf('price') < 0) row.flags.derived.push('price');
+        row.flags.review = true;
+      }
+
+      // 2. 数量 ≥ 100：大概率是金额/单价错位，或也漏小数点
+      if (U.ok(rawQty) && rawQty >= 100) {
+        if (U.ok(rawAmount) && rawAmount >= 100 && Math.abs(rawAmount - rawQty) / Math.max(rawQty, 1) < 0.05) {
+          // qty 列其实是金额，清空 qty 让 reconcile 用 amount/price 重算
+          row.qty = null;
+          fixNotes.push(`数量列识别为${U.fmt(rawQty)}，判定为金额错位，将按金额÷单价重算数量`);
+        } else {
+          row.qty = U.r4(rawQty / 100);
+          fixNotes.push(`数量${U.fmt(rawQty)}按漏小数点修正为${U.fmt(row.qty)}`);
+          if (row.flags.derived.indexOf('qty') < 0) row.flags.derived.push('qty');
+        }
+        row.flags.review = true;
+      }
+
+      // 3. 金额 ≥ 100 且修正后单价合理：金额也可能漏小数点（如 306 实际=3.06）
+      if (U.ok(rawAmount) && rawAmount >= 100 && U.ok(row.price) && row.price < 100) {
+        const calcQ = rawAmount / row.price;
+        if (!this._isNiceQty(calcQ)) {
+          row.amount = U.r2(rawAmount / 100);
+          fixNotes.push(`金额${U.fmt(rawAmount)}按漏小数点修正为${U.fmt(row.amount)}`);
+          if (row.flags.derived.indexOf('amount') < 0) row.flags.derived.push('amount');
           row.flags.review = true;
-          row.flags.note = (row.flags.note ? row.flags.note + '；' : '') +
-            `单价${U.fmt(row.price)}与数据库参考价${U.fmt(mn.price)}差异较大，请核对原始单据`;
         }
       }
 
+      // 4. 数据库价存在但当前单价仍偏差大：用数据库价覆盖
+      if (U.ok(mn.price) && U.ok(row.price) && Math.abs(row.price - mn.price) / Math.max(mn.price, 1) > 0.20) {
+        row.price = mn.price;
+        if (row.flags.derived.indexOf('price') < 0) row.flags.derived.push('price');
+        fixNotes.push(`单价按商品库标准价修正为${U.fmt(mn.price)}`);
+        row.flags.review = true;
+      }
+
+      // 反推（金额优先 + 数据库单价优先）
+      const rc = this.reconcile(row.qty, row.price, row.amount, mn.price, cfg.tol);
+      row.qty = rc.qty; row.price = rc.price; row.amount = rc.amount;
+      row.flags.derived = rc.derived;
+      if (rc.note) fixNotes.push(rc.note);
+
       row.flags.review = mn.review || rc.review || row.flags.review;
+      if (nameUnit.unit) fixNotes.unshift(`单位「${nameUnit.unit}」已从名称拆分`);
       row.flags.note = [mn.review && mn.source === 'fuzzy-low' ? `品名近似匹配(${U.r2(mn.score)})，请确认` : '',
                         mn.source === 'new' ? '商品库中无此品名，可能是新品或识别有误' : '',
                         mn.source === 'db-price' ? '品名按历史单价反查得出，请确认' : '',
                         mn.source === 'blank' ? '品名未识别' : '',
-                        rc.note].filter(Boolean).join('；');
+                        ...fixNotes].filter(Boolean).join('；');
       return row;
     },
 
