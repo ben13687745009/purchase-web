@@ -190,6 +190,52 @@
         if (U.ok(ref) && Math.abs(v - ref) / Math.max(ref, 1) <= 0.15) return true;
         return false;
       }
+      function matchesRef(v) {
+        if (!U.ok(v) || !U.ok(refPrice)) return false;
+        return Math.abs(v - refPrice) / Math.max(refPrice, 1) <= 0.15;
+      }
+
+      // ===== 情况 ④：三值齐全 → 先一致性校验，不再无条件金额优先 =====
+      if (hasQ && hasP && hasA) {
+        const calcAmount = U.r2(qty * price);
+        const diff = Math.abs(calcAmount - amount);
+        const relDiff = diff / Math.max(Math.abs(amount), 1e-9);
+        if (relDiff <= tol || diff <= 0.02) {
+          return { qty, price, amount, derived, review, note }; // 一致，全保留
+        }
+        // 不一致：判断哪个最可能误读
+        const calcQty = U.r4(amount / price);
+        const calcPrice = U.r4(amount / qty);
+        const qtyReasonable = isReasonableQty(qty);
+        const priceReasonable = isReasonablePrice(price, refPrice);
+        const calcQtyReasonable = isReasonableQty(calcQty);
+        const calcPriceReasonable = isReasonablePrice(calcPrice, refPrice);
+        const priceMatchesRef = matchesRef(price);
+        const calcPriceMatchesRef = matchesRef(calcPrice);
+
+        if (qtyReasonable && priceMatchesRef && !calcQtyReasonable) {
+          // 数量、单价合理且单价匹配库价；按金额算出的数量不合理 → 金额错
+          amount = calcAmount; derived.push('amount');
+          note = `三值不一致：数量${U.fmt(qty)}、单价${U.fmt(price)}（匹配库价）合理，金额修正为数量×单价=${U.fmt(calcAmount)}`;
+          review = true;
+        } else if (qtyReasonable && calcPriceMatchesRef && !priceReasonable) {
+          // 数量合理，按金额÷数量得到的单价匹配库价 → 单价错
+          price = calcPrice; derived.push('price');
+          note = `三值不一致：数量${U.fmt(qty)}合理，单价修正为金额÷数量=${U.fmt(calcPrice)}（匹配库价）`;
+          review = true;
+        } else if (priceReasonable && calcQtyReasonable && !qtyReasonable) {
+          // 单价合理，按金额÷单价得到的数量合理 → 数量错
+          qty = calcQty; derived.push('qty');
+          note = `三值不一致：单价${U.fmt(price)}合理，数量修正为金额÷单价=${U.fmt(calcQty)}`;
+          review = true;
+        } else {
+          // 默认仍以金额为锚点，但标记待核对
+          qty = calcQty; derived.push('qty');
+          note = `三值不一致：按金额优先，数量修正为${U.fmt(calcQty)}，请核对原图`;
+          review = true;
+        }
+        return { qty, price, amount, derived, review, note };
+      }
 
       // ===== 情况 ⑤：只有金额 =====
       if (hasA && !hasQ && !hasP) {
@@ -204,33 +250,19 @@
         return { qty, price, amount, derived, review, note };
       }
 
-      // ===== 情况 ①：有金额+单价（不管有没有数量）→ 以金额为准算数量 =====
+      // ===== 情况 ①：有金额+单价（没有数量）→ 以金额为准算数量 =====
       if (hasA && hasP) {
-        const calcQty = U.r4(amount / price);
-        if (hasQ && Math.abs(calcQty - qty) / Math.max(Math.abs(qty), 1e-9) > tol) {
-          // OCR 给的数量与 金额÷单价 不一致 → 覆盖为金额÷单价
-          qty = calcQty; derived.push('qty');
-          note = `金额优先：原数量${U.fmt(qty)}≠金额÷单价(${U.fmt(amount)}÷${U.fmt(price)}=${U.fmt(calcQty)})，已修正`;
-          review = true;
-        } else if (!hasQ) {
-          qty = calcQty; derived.push('qty');
-          note = '数量 = 金额 ÷ 单价';
-        }
-        // 有数量且一致 → 保持不变
+        qty = U.r4(amount / price); derived.push('qty');
+        note = '数量 = 金额 ÷ 单价';
         return { qty, price, amount, derived, review, note };
       }
 
       // ===== 情况 ②：有金额+数量（没有单价）→ 以金额为准算单价 =====
       if (hasA && hasQ && !hasP) {
-        const calcPrice = U.r4(amount / qty);
-        price = calcPrice; derived.push('price');
+        price = U.r4(amount / qty); derived.push('price');
         note = '单价 = 金额 ÷ 数量';
         return { qty, price, amount, derived, review, note };
       }
-
-      // ===== 情况 ④：三值齐全但不一致（前面已处理 hasA+hasP 和 hasA+hasQ，
-      //   到这里说明 hasA=true 但既没有 hasP 也没有 hasQ ——不可能，因为上面已覆盖。
-      //   实际走到这里的是：!hasA 的情况） =====
 
       // ===== 情况 ⑥：没有金额 =====
       if (!hasA) {
