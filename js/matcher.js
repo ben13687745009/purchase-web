@@ -419,67 +419,40 @@
         row.flags.review = true;
       }
 
-      // 3. 金额 ≥ 100 且修正后单价合理：金额也可能漏小数点（如 306 实际=3.06）
+      // 3. 金额 ≥ 100 但无法得到合理数量：提示可能是漏小数点/分单位，后端只标不自动改
       if (U.ok(rawAmount) && rawAmount >= 100 && U.ok(row.price) && row.price < 100) {
         const calcQ = rawAmount / row.price;
         if (!this._isNiceQty(calcQ)) {
-          row.amount = U.r2(rawAmount / 100);
-          fixNotes.push(`金额${U.fmt(rawAmount)}按漏小数点修正为${U.fmt(row.amount)}`);
-          if (row.flags.derived.indexOf('amount') < 0) row.flags.derived.push('amount');
+          fixNotes.push(`金额${U.fmt(rawAmount)}与单价${U.fmt(row.price)}无法得到合理数量，疑似漏小数点/分单位，请核对原单金额列`);
           row.flags.review = true;
         }
       }
 
-      // ★ 4. 异常：金额 ≈ 单价（OCR 把金额列误读成单价列的典型特征）
-      // 例如原图单价 4.85 元、金额 485 分，模型错填成 amount=4.85；qty 几乎总是 1。
+      // ★ 4. 异常标记：金额 ≈ 单价（OCR 把金额列误读成单价列的典型特征）
+      // 例如原图单价 4.85 元、金额 485 分，模型错填成 amount=4.85；只标待核对，不改金额。
       if (U.ok(row.price) && U.ok(row.amount) && row.price > 0 && row.price < 100) {
         const ratio = row.amount / row.price;
         if (ratio >= 0.98 && ratio <= 1.02) {
-          const badAmount = row.amount;
-          const likelyAmount = U.r2(row.price * 100);
-          // 只有修正后金额（分）落在常见分范围内（100~999）才执行，避免误伤
-          if (likelyAmount >= 100 && likelyAmount <= 999) {
-            row.amount = likelyAmount;
-            fixNotes.push(`金额${U.fmt(badAmount)}等于单价${U.fmt(row.price)}，疑似金额列读成单价列；已按单价×100修正为${U.fmt(likelyAmount)}（分）`);
-            if (row.flags.derived.indexOf('amount') < 0) row.flags.derived.push('amount');
-            row.flags.review = true;
-          }
+          fixNotes.push(`金额${U.fmt(row.amount)}≈单价${U.fmt(row.price)}，疑似金额列读成单价列；请核对原单金额列（应为三位整数分）`);
+          row.flags.review = true;
         }
       }
 
-      // ★ 5. 异常：金额精确等于 数量×单价（OCR 用自算填充金额列，没读原金额列）
-      // 例如 qty=2, price=3.06, amount=6.12；真实金额列应为 612 分。
+      // ★ 5. 异常标记：金额精确等于 数量×单价（OCR 用自算填充金额列，没读原金额列）
+      // 例如 qty=2, price=3.06, amount=6.12；只标待核对，不改金额。
       if (U.ok(row.qty) && U.ok(row.price) && U.ok(row.amount) && row.qty > 0 && row.price > 0) {
         const calcAmount = U.r2(row.qty * row.price);
         if (Math.abs(row.amount - calcAmount) < 0.005 && row.amount > 0 && row.amount < 100) {
-          const likelyAmount = U.r2(calcAmount * 100);
-          // 修正后金额（分）应在常见分范围 100~9999 内
-          if (likelyAmount >= 100 && likelyAmount <= 9999) {
-            const badAmount = row.amount;
-            row.amount = likelyAmount;
-            fixNotes.push(`金额${U.fmt(badAmount)}等于数量×单价，疑似金额列被自算填充；已按×100修正为${U.fmt(likelyAmount)}（分）`);
-            if (row.flags.derived.indexOf('amount') < 0) row.flags.derived.push('amount');
-            row.flags.review = true;
-          }
+          fixNotes.push(`金额${U.fmt(row.amount)}=数量×单价，疑似金额列被自算填充；请核对原单金额列（应为三位整数分）`);
+          row.flags.review = true;
         }
       }
 
-      // ★ 6. 异常：金额 ≈ 单价²（OCR 把金额列误填成 price×qty 或列错位的典型特征）
-      // 例如 price=4.14, amount=17.13 → amount/price=4.1377≈price。
+      // ★ 6. 异常标记：金额 ≈ 单价²（OCR 把金额列误填成 price×qty 或列错位的典型特征）
       if (U.ok(row.price) && U.ok(row.amount) && row.price > 0) {
         const ratio = row.amount / row.price;
         if (Math.abs(ratio - row.price) / Math.max(row.price, 0.01) < 0.08) {
-          const badAmount = row.amount;
-          // 单价是小数且数量≈1 → 真实金额大概率是 price×100（如 4.14→414）
-          if (U.ok(row.qty) && row.qty >= 0.95 && row.qty <= 1.05 && row.price < 10) {
-            row.amount = U.r2(row.price * 100);
-            fixNotes.push(`金额${U.fmt(badAmount)}≈单价²，判定列错位；已按单价×100修正为${U.fmt(row.amount)}`);
-          } else {
-            // 否则清空金额，让 reconcile 用 qty×price 重算
-            row.amount = null;
-            fixNotes.push(`金额${U.fmt(badAmount)}≈单价²，判定列错位；已清空并按数量×单价重算`);
-          }
-          if (row.flags.derived.indexOf('amount') < 0) row.flags.derived.push('amount');
+          fixNotes.push(`金额${U.fmt(row.amount)}≈单价²，疑似列错位；请核对原单金额列`);
           row.flags.review = true;
         }
       }
@@ -512,14 +485,11 @@
         row.flags.review = true;
       }
 
-      // 金额仍 ≥ 100 且单价合理：也按「分」或漏小数点兜底
+      // 金额仍 ≥ 100 且单价合理：若数量不合理，只标待核对，不自动改金额
       if (U.ok(row.amount) && row.amount >= 100 && U.ok(row.price) && row.price < 100) {
         const calcQ = row.amount / row.price;
         if (!this._isNiceQty(calcQ)) {
-          const badAmount = row.amount;
-          row.amount = U.r2(badAmount / 100);
-          fixNotes.push(`兜底修正：金额${U.fmt(badAmount)}与单价${U.fmt(row.price)}无法得到合理数量，按漏小数点/分改为${U.fmt(row.amount)}`);
-          if (row.flags.derived.indexOf('amount') < 0) row.flags.derived.push('amount');
+          fixNotes.push(`金额${U.fmt(row.amount)}与单价${U.fmt(row.price)}无法得到合理数量，请核对原单金额列`);
           row.flags.review = true;
         }
       }
