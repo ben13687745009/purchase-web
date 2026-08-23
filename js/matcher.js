@@ -196,7 +196,7 @@
 
       // ===== 有金额 =====
       if (hasA) {
-        // 有金额+单价 → 数量 = 金额 ÷ 单价
+        // 有金额+单价 → 以金额为准，用「金额 ÷ 单价」校验并修正数量
         if (U.ok(p)) {
           // ★ 金额单位「分」检测：送货单金额列常写「分」（如 414 分 = 4.14 元）。
           // 典型特征：金额 ÷ 单价 ≈ 100 的整数倍（1×100、2×100…），且单价为合理采购价。
@@ -207,23 +207,39 @@
               const expectedFen = candidateQty * p * 100;
               if (candidateQty >= 1 && candidateQty <= 50 &&
                   Math.abs(a - expectedFen) / Math.max(expectedFen, 1) < 0.02) {
-                // 金额单位为分：换算成元
+                // 金额单位为分：换算成元。这是标准单位换算，不标待核对，也不标金额推算。
                 a = U.r2(a / 100);
-                derived.push('amount');
-                note = `金额${U.fmt(amount)}为「分」（${candidateQty}×${U.fmt(p)}×100），已换算为元：${U.fmt(a)}`;
+                note = `金额${U.fmt(amount)}为「分」（${candidateQty}×${U.fmt(p)}×100=${U.fmt(expectedFen)}），已换算为元：${U.fmt(a)}`;
                 amount = a;
-                review = true;
+                // 不加入 derived，避免 UI 显示「金额推算」
+                if (derived.indexOf('amount') >= 0) derived.splice(derived.indexOf('amount'), 1);
               }
             }
           }
           const calcQ = U.r4(a / p);
-          if (!isNiceQty(calcQ) && isNiceQty(q) && Math.abs(q - calcQ) / Math.max(calcQ, 1) > 0.10) {
-            // 计算出的数量明显不合理，但 OCR 数量合理：保留 OCR 数量并标记
+          const hasQR = U.ok(q);
+          const qOK = isNiceQty(q);
+          const calcOK = isNiceQty(calcQ);
+          const diff = hasQR ? Math.abs(q - calcQ) : 0;
+          const match = qOK && calcOK && diff <= Math.max(0.05, calcQ * 0.05);
+
+          if (match) {
+            // 识别数量与金额÷单价一致，直接保留，不标推算
+            note = (note ? note + '；' : '') + `金额÷单价=${U.fmt(calcQ)}，识别数量校验一致`;
+          } else if (!hasQR || !qOK) {
+            // 缺少数量或数量不合理：用金额÷单价推算
+            q = calcQ; derived.push('qty');
+            note = (note ? note + '；' : '') + '数量 = 金额 ÷ 单价';
+            if (!calcOK) review = true;
+          } else if (qOK && !calcOK) {
+            // 计算值不合理但 OCR 数量合理：保留 OCR 数量并标记
             review = true;
             note = (note ? note + '；' : '') + `金额${U.fmt(a)}÷单价${U.fmt(p)}=${U.fmt(calcQ)} 不合理，保留识别数量${U.fmt(q)}，请核对`;
           } else {
+            // 两者都合理但不一致：以金额÷单价为准修正
             q = calcQ; derived.push('qty');
-            note = (note ? note + '；' : '') + '数量 = 金额 ÷ 单价';
+            review = true;
+            note = (note ? note + '；' : '') + `识别数量${U.fmt(q)}与金额÷单价${U.fmt(calcQ)}不一致，已按金额修正`;
           }
           return { qty: q, price: p, amount: a, derived, review, note };
         }

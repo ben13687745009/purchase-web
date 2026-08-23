@@ -13,8 +13,8 @@
   var MAX_PIXELS = 4096 * 4096;
 
   /* ---------- 图片压缩 ----------
-   * 电脑端：原图等比压缩即可，不做任何增强/锐化/调亮度，避免破坏打印/手写原貌。
-   * 手机端：保留手写增强管线（拍照反光、阴影、模糊件需要）。
+   * 电脑端与手机端均启用手写增强管线：淡字、铅笔/圆珠笔笔迹、蓝底复写纸、
+   * 拍照反光/阴影都需要对比度拉伸、蓝度增强、锐化、笔画加粗。
    */
   function compress(file, maxW, opts) {
     opts = opts || {};
@@ -26,62 +26,6 @@
     return new Promise(function (res, rej) {
       var url = URL.createObjectURL(file);
       var cleanup = function () { try { URL.revokeObjectURL(url); } catch (e) { } };
-
-      var simpleRender = function (bitmap) {
-        try {
-          var w = bitmap.width, h = bitmap.height;
-          if (!w || !h) throw new Error('图片尺寸为 0');
-          var scale = (w > maxW) ? (maxW / w) : 1;
-          if (w * h * scale * scale > MAX_PIXELS) {
-            scale = Math.sqrt(MAX_PIXELS / (w * h));
-          }
-          w = Math.max(1, Math.round(w * scale));
-          h = Math.max(1, Math.round(h * scale));
-          var cv = document.createElement('canvas');
-          cv.width = w; cv.height = h;
-          var cx = cv.getContext('2d');
-          cx.fillStyle = '#fff';
-          cx.fillRect(0, 0, w, h);
-          cx.drawImage(bitmap, 0, 0, w, h);
-          if (bitmap.close) try { bitmap.close(); } catch (e) { }
-
-          // 电脑端只做轻量对比度拉伸：看清淡字和小数点，不锐化、不加粗、不改笔画
-          var imgData = cx.getImageData(0, 0, w, h);
-          var d = imgData.data;
-          var minV = 255, maxV = 0;
-          for (var i = 0; i < d.length; i += 4) {
-            var g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-            if (g < minV) minV = g;
-            if (g > maxV) maxV = g;
-          }
-          var range = Math.max(20, maxV - minV); // 避免除0，最小拉伸20
-          var lo = minV + range * 0.02; // 去除少量极暗噪点
-          var hi = maxV - range * 0.02; // 去除少量极亮背景
-          var span = Math.max(1, hi - lo);
-          for (var j = 0; j < d.length; j += 4) {
-            for (var c = 0; c < 3; c++) {
-              var v = d[j + c];
-              v = Math.round((v - lo) / span * 255);
-              d[j + c] = Math.max(0, Math.min(255, v));
-            }
-          }
-          cx.putImageData(imgData, 0, 0);
-
-          // 竖拍单据转正
-          if (h > w * 1.3) {
-            var rotCv = document.createElement('canvas');
-            rotCv.width = h; rotCv.height = w;
-            var rcx = rotCv.getContext('2d');
-            rcx.translate(h, 0);
-            rcx.rotate(Math.PI / 2);
-            rcx.drawImage(cv, 0, 0);
-            cv = rotCv; cx = rcx;
-          }
-
-          cleanup();
-          res(cv.toDataURL('image/jpeg', 0.95));
-        } catch (e) { cleanup(); rej(e); }
-      };
 
       var enhancedRender = function (bitmap) {
         try {
@@ -115,6 +59,19 @@
             d[j]     = Math.round(Math.min(255, (d[j]     - minR) / rangeR * 255 * 0.95 + 12));
             d[j + 1] = Math.round(Math.min(255, (d[j + 1] - minG) / rangeG * 255 * 0.95 + 12));
             d[j + 2] = Math.round(Math.min(255, (d[j + 2] - minB) / rangeB * 255 * 0.95 + 12));
+          }
+
+          // 蓝度拉伸：针对蓝色复写纸/蓝色圆珠笔笔迹，把蓝色字迹压深（接近黑），同时保留白色背景
+          for (var j = 0; j < d.length; j += 4) {
+            var r = d[j], g = d[j + 1], b = d[j + 2];
+            var blueness = b - Math.max(r, g);
+            // 蓝色字迹区域：b 明显高于 r/g，但本身不是极深蓝/阴影
+            if (blueness > 8 && blueness < 90 && b < 215) {
+              var darken = Math.round(Math.max(0, Math.min(255, blueness * 4.2)));
+              d[j]     = Math.max(0, r - darken * 0.55);
+              d[j + 1] = Math.max(0, g - darken * 0.55);
+              d[j + 2] = Math.max(0, b - darken * 0.35);
+            }
           }
           cx.putImageData(imgData, 0, 0);
 
@@ -213,7 +170,7 @@
         img.src = url;
       };
 
-      var render = isMobile ? enhancedRender : simpleRender;
+      var render = enhancedRender;
 
       if (typeof window.createImageBitmap === 'function') {
         createImageBitmap(file, { imageOrientation: 'from-image' })
@@ -360,11 +317,12 @@
 4. 所有数字最多保留 2 位小数。
 【字段规则——金额列】
 金额列（amount）必须原样读取单据上的数字，最高优先级，严禁用「数量×单价」去计算或替换金额列。例如原图金额列写的是 414，就必须输出 amount=414；写的是 495 就必须输出 amount=495；写的是 17.13 才输出 amount=17.13。绝对禁止把三位数金额 414 改成 4.14 或 17.13 这类明显是「单价×单价」的错误数字。
-注意：部分送货单表头为「百十万千百十元角分」，金额格填的是「分」。例如数量 1、单价 4.14 元的商品，金额格会写 414（分）。此时仍原样输出 amount=414，后端会自动按 100 分=1 元换算。
+注意：部分送货单表头为「百十万千百十元角分」，金额格填的是「分」。例如数量 1、单价 4.14 元的商品，金额格会写 414（分）。此时仍原样输出 amount=414，不要自己除以 100，后端会自动按 100 分=1 元换算。
 【字段规则——单价】
 餐饮采购单据上的单价几乎全部是小于 100 的小数，常见区间 1~50。如果识别出单价 ≥ 100，优先判定为漏掉了小数点，必须按下方「数据库比对」规则修正：
   306 → 3.06； 495 → 4.95； 414 → 4.14； 385 → 3.85； 390 → 3.90； 485 → 4.85。
 注意：只有原图确实看清是小数点才输出小数；看不清时按数据库价输出合理小数，严禁把大整数当真实单价。
+当金额列和单价列数字完全相同时（例如金额格写 414，单价格也写 414），表示数量=1、单价=4.14 元、金额=414 分=4.14 元，不要因此把数量或金额改错。
 【字段规则——数量】
 数量列（qty）在餐饮送货单里几乎总是整数 1、2、3…，偶尔有 1.5、2.5 等简单小数。严禁把单价列/金额列的数字填到数量列。如果数量列看不清，宁可输出 null 也不要猜一个跟单价相近的小数。
 【数学校验——金额优先】
