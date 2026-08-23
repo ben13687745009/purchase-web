@@ -447,7 +447,24 @@
         }
       }
 
-      // ★ 5. 异常：金额 ≈ 单价²（OCR 把金额列误填成 price×qty 或列错位的典型特征）
+      // ★ 5. 异常：金额精确等于 数量×单价（OCR 用自算填充金额列，没读原金额列）
+      // 例如 qty=2, price=3.06, amount=6.12；真实金额列应为 612 分。
+      if (U.ok(row.qty) && U.ok(row.price) && U.ok(row.amount) && row.qty > 0 && row.price > 0) {
+        const calcAmount = U.r2(row.qty * row.price);
+        if (Math.abs(row.amount - calcAmount) < 0.005 && row.amount > 0 && row.amount < 100) {
+          const likelyAmount = U.r2(calcAmount * 100);
+          // 修正后金额（分）应在常见分范围 100~9999 内
+          if (likelyAmount >= 100 && likelyAmount <= 9999) {
+            const badAmount = row.amount;
+            row.amount = likelyAmount;
+            fixNotes.push(`金额${U.fmt(badAmount)}等于数量×单价，疑似金额列被自算填充；已按×100修正为${U.fmt(likelyAmount)}（分）`);
+            if (row.flags.derived.indexOf('amount') < 0) row.flags.derived.push('amount');
+            row.flags.review = true;
+          }
+        }
+      }
+
+      // ★ 6. 异常：金额 ≈ 单价²（OCR 把金额列误填成 price×qty 或列错位的典型特征）
       // 例如 price=4.14, amount=17.13 → amount/price=4.1377≈price。
       if (U.ok(row.price) && U.ok(row.amount) && row.price > 0) {
         const ratio = row.amount / row.price;
