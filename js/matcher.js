@@ -189,9 +189,23 @@
         return false;
       }
 
-      // 优先采用数据库参考价（调用方已处理过大数，这里只做兜底）
-      if (U.ok(refPrice) && (!hasP || p >= 100 || Math.abs(p - refPrice) / Math.max(refPrice, 1) > 0.20)) {
+      // 优先修正单价：单价≥100 几乎不可能是真实餐饮采购单价，视为漏小数点；
+      // 与商品库参考价偏差>20% 时，优先采用商品库标准价。
+      if (U.ok(p) && p >= 100) {
+        if (U.ok(refPrice) && refPrice < 100) {
+          const badPrice = p;
+          p = refPrice; derived.push('price');
+          note = `单价${U.fmt(badPrice)}≥100，按商品库参考价修正为${U.fmt(p)}`;
+        } else {
+          const badPrice = p;
+          p = U.r4(p / 100); derived.push('price');
+          note = `单价${U.fmt(badPrice)}≥100，按漏小数点修正为${U.fmt(p)}`;
+        }
+      }
+      if (U.ok(refPrice) && U.ok(p) && refPrice < 100 && Math.abs(p - refPrice) / Math.max(refPrice, 1) > 0.20) {
+        const badPrice = p;
         p = refPrice; derived.push('price');
+        note = (note ? note + '；' : '') + `单价${U.fmt(badPrice)}与商品库参考价${U.fmt(refPrice)}偏差>20%，已修正为${U.fmt(p)}`;
       }
 
       // ===== 有金额 =====
