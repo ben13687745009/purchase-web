@@ -675,9 +675,9 @@
       tr.appendChild(mkCell(r.name, 'name', 'nm'));
       tr.appendChild(mkCell(U.fmt(r.qty), 'qty', 'num'));
       tr.appendChild(mkCell(U.fmt(r.price), 'price', 'num'));
-      // 金额列：显示换算后的元值（如 4.14），使「金额 = 数量 × 单价」在表格里直接成立，无需 ÷100。
-      // 模型识别到的原始「分」值保留在 row.rawAmount 供追溯，不参与显示与导出。
-      tr.appendChild(mkCell(U.fmt(r.amount), 'amount', 'num'));
+      // 金额列：直接显示 OCR 识别到的原始数字（如 414），不做任何 ÷100 换算，避免和单价(4.14)撞脸误判。
+      // 原始值存 row.rawAmount；内部记账/导出用的元值 row.amount（= 414÷100）只在导出时生效，表格不显示。
+      tr.appendChild(mkCell(U.fmt(r.rawAmount != null ? r.rawAmount : r.amount), 'amount', 'num'));
 
       // 来源标记
       const td = el('td');
@@ -741,10 +741,23 @@
       else if (key === 'cat') row.cat = val;
       else if (key === 'name') { row.name = String(val).trim(); row.rawName = row.name; }
       else if (key === 'amount') {
-        // 金额编辑：表格显示的就是元值，用户填入的数字直接作为记账金额（元），与单价/数量同单位。
+        // 金额编辑：表格直接显示用户填入的原始数字（如 414），不做 ÷100。
+        // 内部记账金额按「分」检测换算成元（仅导出/合计用）：若填入值≥100 且 ÷单价≈100 整数倍，判定为分。
         const v = U.toNum(val);
-        row.amount = v;
-        row.rawAmount = v; // 同步原始值，避免与显示口径不一致
+        row.rawAmount = v;
+        const pr = U.toNum(row.price);
+        if (U.ok(v) && U.ok(pr) && pr > 0 && pr < 100) {
+          const ratio = v / pr;
+          if (ratio >= 50) {
+            const candQ = Math.round(ratio / 100);
+            const expFen = candQ * pr * 100;
+            row.amount = (candQ >= 1 && candQ <= 50 && Math.abs(v - expFen) / Math.max(expFen, 1) < 0.02) ? U.r2(v / 100) : v;
+          } else {
+            row.amount = v;
+          }
+        } else {
+          row.amount = v;
+        }
       } else row[key] = U.toNum(val);
 
       const f = row.flags || (row.flags = { derived: [], note: '' });
