@@ -13,8 +13,9 @@
   var MAX_PIXELS = 4096 * 4096;
 
   /* ---------- 图片压缩 ----------
-   * 电脑端与手机端均启用手写增强管线：淡字、铅笔/圆珠笔笔迹、蓝底复写纸、
-   * 拍照反光/阴影都需要对比度拉伸、蓝度增强、锐化、笔画加粗。
+   * 电脑端（扫描件/截图/文件传输助手的清晰图）：只做轻量增强——等比压缩 + 
+   * 对比度拉伸 + 蓝度拉伸，不锐化、不加粗，避免清晰单据被过度增强后数字粘连、列串行。
+   * 手机端（拍照/反光/阴影/模糊手写件）：走完整手写增强管线（锐化、笔画加粗）。
    */
   function compress(file, maxW, opts) {
     opts = opts || {};
@@ -26,6 +27,71 @@
     return new Promise(function (res, rej) {
       var url = URL.createObjectURL(file);
       var cleanup = function () { try { URL.revokeObjectURL(url); } catch (e) { } };
+
+      var simpleRender = function (bitmap) {
+        try {
+          var w = bitmap.width, h = bitmap.height;
+          if (!w || !h) throw new Error('图片尺寸为 0');
+          var scale = (w > maxW) ? (maxW / w) : 1;
+          if (w * h * scale * scale > MAX_PIXELS) {
+            scale = Math.sqrt(MAX_PIXELS / (w * h));
+          }
+          w = Math.max(1, Math.round(w * scale));
+          h = Math.max(1, Math.round(h * scale));
+          var cv = document.createElement('canvas');
+          cv.width = w; cv.height = h;
+          var cx = cv.getContext('2d');
+          cx.fillStyle = '#fff';
+          cx.fillRect(0, 0, w, h);
+          cx.drawImage(bitmap, 0, 0, w, h);
+          if (bitmap.close) try { bitmap.close(); } catch (e) { }
+
+          // 电脑端清晰件只做轻量增强：对比度拉伸 + 蓝度拉伸，不锐化、不加粗
+          var imgData = cx.getImageData(0, 0, w, h);
+          var d = imgData.data;
+
+          // 轻量对比度拉伸
+          var minR = 255, maxR = 0, minG = 255, maxG = 0, minB = 255, maxB = 0;
+          for (var i = 0; i < d.length; i += 4) {
+            if (d[i] < minR) minR = d[i]; if (d[i] > maxR) maxR = d[i];
+            if (d[i + 1] < minG) minG = d[i + 1]; if (d[i + 1] > maxG) maxG = d[i + 1];
+            if (d[i + 2] < minB) minB = d[i + 2]; if (d[i + 2] > maxB) maxB = d[i + 2];
+          }
+          var rangeR = Math.max(1, maxR - minR), rangeG = Math.max(1, maxG - minG), rangeB = Math.max(1, maxB - minB);
+          for (var j = 0; j < d.length; j += 4) {
+            d[j]     = Math.round(Math.min(255, (d[j]     - minR) / rangeR * 255 * 0.95 + 12));
+            d[j + 1] = Math.round(Math.min(255, (d[j + 1] - minG) / rangeG * 255 * 0.95 + 12));
+            d[j + 2] = Math.round(Math.min(255, (d[j + 2] - minB) / rangeB * 255 * 0.95 + 12));
+          }
+
+          // 蓝度拉伸：蓝色复写纸/蓝笔字迹压深，保留白色背景
+          for (var j = 0; j < d.length; j += 4) {
+            var r = d[j], g = d[j + 1], b = d[j + 2];
+            var blueness = b - Math.max(r, g);
+            if (blueness > 8 && blueness < 90 && b < 215) {
+              var darken = Math.round(Math.max(0, Math.min(255, blueness * 4.2)));
+              d[j]     = Math.max(0, r - darken * 0.55);
+              d[j + 1] = Math.max(0, g - darken * 0.55);
+              d[j + 2] = Math.max(0, b - darken * 0.35);
+            }
+          }
+          cx.putImageData(imgData, 0, 0);
+
+          // 竖拍单据转正
+          if (h > w * 1.3) {
+            var rotCv = document.createElement('canvas');
+            rotCv.width = h; rotCv.height = w;
+            var rcx = rotCv.getContext('2d');
+            rcx.translate(h, 0);
+            rcx.rotate(Math.PI / 2);
+            rcx.drawImage(cv, 0, 0);
+            cv = rotCv; cx = rcx;
+          }
+
+          cleanup();
+          res(cv.toDataURL('image/jpeg', 0.95));
+        } catch (e) { cleanup(); rej(e); }
+      };
 
       var enhancedRender = function (bitmap) {
         try {
@@ -171,7 +237,7 @@
         img.src = url;
       };
 
-      var render = enhancedRender;
+      var render = isMobile ? enhancedRender : simpleRender;
 
       if (typeof window.createImageBitmap === 'function') {
         createImageBitmap(file, { imageOrientation: 'from-image' })
@@ -327,6 +393,7 @@
 注意：只有原图确实看清是小数点才输出小数；看不清时按数据库价输出合理小数，严禁把大整数当真实单价。
 ★ 单价列几乎都带两位小数（如 4.14、3.06、2.94、5.16、4.95），请逐位辨认小数点：不要把 4.14 读成 414（吞掉小数点），也不要读成 4.4 或 4.1（漏看中间数字）。小数点看清才输出小数；看不清宁可输出 null 也不要猜一个整数。
 当金额列和单价列数字完全相同时（例如金额格写 414，单价格也写 414），表示数量=1、单价=4.14 元、金额=414 分=4.14 元，不要因此把数量或金额改错。
+【错误示例——金额绝不能等于单价】如果你输出 qty=1, price=4.85, amount=4.85，这是绝对错误的：金额列被读成了单价列。正确应为 qty=1, price=4.85, amount=485（分）。自检：当 qty=1 时 amount 是否等于 price？若相等，说明金额列没读或读串了，必须回到原图重读金额列的三位整数。
 【字段规则——数量】
 数量列（qty）在餐饮送货单里几乎总是整数 1、2、3…，偶尔有 1.5、2.5 等简单小数。严禁把单价列/金额列的数字填到数量列。如果数量列看不清，宁可输出 null 也不要猜一个跟单价相近的小数。
 【数学校验——金额优先】
