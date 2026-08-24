@@ -781,6 +781,16 @@
       $('#btnExportDb').onclick = () => {
         U.download(new Blob([JSON.stringify(this.items, null, 2)], { type: 'application/json' }), '商品库.json');
       };
+      $('#btnNormUnit').onclick = async () => {
+        if (!window.confirm('将把商品库与所有账套里的单位写法统一为标准（KG→kg、千克→kg、克→g、毫升→ml、升→l），不改动数量与金额。确定执行？')) return;
+        $('#btnNormUnit').disabled = true;
+        try {
+          const r = await S.normalizeUnits();
+          this.items = await S.allItems(); M.buildIndex(this.items); this.renderDb();
+          toast(`单位已统一：商品库 ${r.items} 条、账套 ${r.rows} 行已标准化`, 'ok');
+        } catch (e) { toast('统一失败：' + e.message, 'err'); }
+        finally { $('#btnNormUnit').disabled = false; }
+      };
     },
 
     async importXlsx(files) {

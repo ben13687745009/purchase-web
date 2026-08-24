@@ -98,6 +98,33 @@
     async delItem(id) { const s = await tx('items', 'readwrite'); return reqP(s.delete(id)); },
     async clearItems() { const s = await tx('items', 'readwrite'); return reqP(s.clear()); },
 
+    /* ---------- 统一数据库单位 ----------
+     * 把商品库 items 与所有账套 rows 的「unit」字段统一为标准写法
+     * （KG→kg / 千克→kg / 克→g / 毫升→ml / 升→l …），不跨单位换算（斤仍是斤）。
+     * 返回改动统计 {items, rows}。
+     */
+    async normalizeUnits() {
+      const U = g.U;
+      const changed = { items: 0, rows: 0 };
+      const items = await this.allItems();
+      let itemsDirty = false;
+      items.forEach(it => {
+        const u = U.normUnit(it.unit);
+        if ((it.unit || '') !== u) { it.unit = u; itemsDirty = true; }
+      });
+      if (itemsDirty) { await this.putItems(items); changed.items = items.length; }
+      const books = await this.allBooks();
+      for (const b of books) {
+        let dirty = false;
+        (b.rows || []).forEach(r => {
+          const u = U.normUnit(r.unit);
+          if ((r.unit || '') !== u) { r.unit = u; dirty = true; }
+        });
+        if (dirty) { await this.putBook(b); changed.rows += (b.rows || []).length; }
+      }
+      return changed;
+    },
+
     /* ---------- books 账套 ---------- */
     async allBooks() { const s = await tx('books'); return reqP(s.getAll()); },
     async getBook(id) { const s = await tx('books'); return reqP(s.get(id)); },

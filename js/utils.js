@@ -213,9 +213,23 @@
     return bc >= 2 ? best : median(arr);
   }
 
+  /* 单位归一：消除「同一计量单位的不同写法」，但绝不跨单位换算。
+   *   kg/KG/千克/公斤 → kg
+   *   g/克           → g
+   *   ml/ML/毫升     → ml
+   *   l/L/升/公升    → l
+   *   其余中文单位（斤/包/箱/袋/盒/罐/瓶/支/件/个/份/套/条/只/扎/桶/两/磅…）原样保留
+   */
+  const UNIT_MAP = { KG: 'kg', 千克: 'kg', 公斤: 'kg', ML: 'ml', 毫升: 'ml', L: 'l', 升: 'l', 公升: 'l', g: 'g', 克: 'g' };
+  function normUnit(u) {
+    if (!u) return '';
+    const s = String(u).trim();
+    return s ? (UNIT_MAP[s] || s) : '';
+  }
+
   g.U = {
     toNum, ok, r2, r4, fmt, money, parseDate, dateKey, guessShop, guessMonth,
     splitSheet, makeYm, normName, sim, diceSim, levenshtein, uid, $, $$, el, esc,
-    toast, download, median, mode
+    toast, download, median, mode, normUnit
   };
 })(window);

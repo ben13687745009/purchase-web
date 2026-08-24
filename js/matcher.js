@@ -289,7 +289,7 @@
 
     /* ---------- 从名称末尾拆分单位 ---------- */
     _splitUnit(name, rawUnit) {
-      if (rawUnit) return { name: String(name || '').trim(), unit: String(rawUnit).trim() };
+      if (rawUnit) return { name: String(name || '').trim(), unit: U.normUnit(rawUnit) };
       const units = ['箱','包','袋','盒','罐','瓶','支','件','个','份','套','条','只','扎','桶','升','斤','两','磅','kg','g','ml','l','千克','克','毫升','KG','ML','L'];
       let n = String(name || '').trim();
       let u = '';
@@ -300,7 +300,7 @@
           break;
         }
       }
-      return { name: n, unit: u };
+      return { name: n, unit: U.normUnit(u) };
     },
 
     /* ---------- 单行完整处理 ---------- */
@@ -506,9 +506,11 @@
         const id = r.cat + '|' + U.normName(r.name);
         let it = map.get(id);
         if (!it) {
-          it = { id, cat: r.cat, name: r.name, prices: [], ref: null, low: null, high: null, n: 0, shops: [], alias: [], last: ym || '' };
+          it = { id, cat: r.cat, name: r.name, prices: [], ref: null, low: null, high: null, n: 0, shops: [], alias: [], last: ym || '', unit: '' };
           map.set(id, it); added++;
         } else updated++;
+        // 记录归一化后的单位（OCR/拆分得到的写法统一为标准）
+        if (U.ok(r.unit)) it.unit = U.normUnit(r.unit);
         it.prices.push(r.price);
         if (it.prices.length > 40) it.prices = it.prices.slice(-40);
         it.ref = U.mode(it.prices);
