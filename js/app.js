@@ -18,10 +18,50 @@
     fillCatSelect(sel, withAuto) {
       const cur = sel.value;
       sel.innerHTML = '';
-      if (withAuto) sel.appendChild(el('option', { value: '', text: '请选择分类（一个Excel=一类）' }));
+      if (withAuto) sel.appendChild(el('option', { value: '', text: '自动识别（按品名推断）' }));
       (S.cfg.cats || []).forEach(c => sel.appendChild(el('option', { value: c, text: c })));
+      // ★ 手动输入分类：列表里没有的分类，可现场写
+      sel.appendChild(el('option', { value: '__custom__', text: '➕ 手动输入分类…' }));
       if (S.cfg.cats && S.cfg.cats.indexOf(cur) >= 0) sel.value = cur;
+      else if (cur === '__custom__') sel.value = '__custom__';
       else sel.value = withAuto ? '' : (S.cfg.cats[0] || '');
+      // 同步「手动输入」框显示状态
+      const custom = document.getElementById(sel.id + 'Custom');
+      if (custom) custom.hidden = (sel.value !== '__custom__');
+    },
+
+    /* 读取强制分类：若选了「手动输入」，取输入框的值；否则取下拉值 */
+    getForcedCat(selId) {
+      const sel = document.getElementById(selId);
+      if (!sel) return '';
+      if (sel.value === '__custom__') {
+        const custom = document.getElementById(selId + 'Custom');
+        return ((custom && custom.value) || '').trim();
+      }
+      return (sel.value || '').trim();
+    },
+
+    /* 绑定强制分类下拉框 → 切到「手动输入」时显示输入框 */
+    bindCatCustom(selId) {
+      const sel = document.getElementById(selId);
+      const custom = document.getElementById(selId + 'Custom');
+      if (!sel || !custom) return;
+      sel.onchange = () => {
+        custom.hidden = (sel.value !== '__custom__');
+        if (!custom.hidden) { custom.focus(); }
+      };
+      // 输入时即时同步到 select 的 title，便于日志显示
+      custom.oninput = () => { sel.title = custom.value; };
+    },
+
+    /* 把手动输入的「新分类」静默写进分类列表，方便以后直接选 */
+    async persistNewCat(cat) {
+      cat = (cat || '').trim();
+      if (!cat) return;
+      if ((S.cfg.cats || []).indexOf(cat) < 0) {
+        S.cfg.cats = (S.cfg.cats || []).concat(cat);
+        try { await S.saveCfg(); } catch (e) { /* 忽略保存失败 */ }
+      }
     },
 
     async init() {
@@ -44,6 +84,8 @@
       this.fillCatSelect($('#rawCat'), true);
       this.bindNav();
       this.bindWork();
+      this.bindCatCustom('ocrCat');
+      this.bindCatCustom('rawCat');
       this.bindRawXlsx();
       this.bindTable();
       this.bindDb();
@@ -251,7 +293,7 @@
       if (!files.length) return;
       if (!this.book) { toast('请先选择账套', 'err'); return; }
       const log = $('#rawLog'); log.hidden = false; log.textContent = '解析中…';
-      const forcedCat = $('#rawCat').value || '';
+      const forcedCat = this.getForcedCat('rawCat');
       const month = parseInt(this.book.ym.slice(2), 10);
       Promise.all(files.map(f => IMP.parseRawItems(f, { forceCat: forcedCat, cats: S.cfg.cats, month }))).then(res => {
         let total = 0;
@@ -273,7 +315,8 @@
     async runRawImport() {
       if (!this.book) { toast('请先选择账套', 'err'); return; }
       if (!this.rawItems.length) { toast('没有待导入的数据'); return; }
-      const forcedCat = $('#rawCat').value || '';
+      const forcedCat = this.getForcedCat('rawCat');
+      await this.persistNewCat(forcedCat);
       const month = parseInt(this.book.ym.slice(2), 10);
       const rows = this.rawItems.map(it => M.processRow({
         date: it.date, name: it.name,
@@ -326,7 +369,8 @@
       $('#btnOcr').disabled = true;
       $('#ocrProg').hidden = false;
       $('#ocrLog').textContent = '';
-      const forcedCat = $('#ocrCat').value || '';
+      const forcedCat = this.getForcedCat('ocrCat');
+      await this.persistNewCat(forcedCat);
       this.log(`开始识别 ${targets.length} 张 · 模型 ${api.model} · 并发 ${api.conc}${forcedCat ? ' · 强制分类「' + forcedCat + '」' : ''}`);
       const mobileCount = targets.filter(p => p.source === 'mobile').length;
       if (mobileCount) {

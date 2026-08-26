@@ -81,7 +81,7 @@ window.addEventListener('error', function(e) {
             <label style="font-size:13px;color:var(--muted)">本次识别分类：</label>
             <select id="ocrCat" style="padding:5px 9px;border:1px solid var(--line);border-radius:7px;min-width:150px">
               <option value="">自动识别（按品名推断）</option>
-            </select>
+            </select><input id="ocrCatCustom" placeholder="输入新分类名" style="padding:5px 9px;border:1px solid var(--line);border-radius:7px;min-width:120px;margin-left:8px" hidden>
             <span class="muted" style="font-size:12px">一次传 20-30 张同类照片时，先选好分类再识别</span>
             <span class="muted" id="ocrHint">先在「设置」里填好视觉模型 API</span>
           </div>
@@ -105,7 +105,7 @@ window.addEventListener('error', function(e) {
             <label style="font-size:13px;color:var(--muted)">本次导入分类：</label>
             <select id="rawCat" style="padding:5px 9px;border:1px solid var(--line);border-radius:7px;min-width:150px">
               <option value="">自动识别（按品名推断）</option>
-            </select>
+            </select><input id="rawCatCustom" placeholder="输入新分类名" style="padding:5px 9px;border:1px solid var(--line);border-radius:7px;min-width:120px;margin-left:8px" hidden>
             <span class="muted" style="font-size:12px">一次传多个文件时，先选好分类再导入</span>
           </div>
         </div>
@@ -349,13 +349,13 @@ window.addEventListener('error', function(e) {
 </div>
 
 <script>window.__scriptErrors = [];</script>
-<script src="vendor/exceljs.min.js?v=2026082702" onerror="window.__scriptErrors.push('load failed: '+this.src)"></script>
-<script src="js/utils.js?v=2026082702" onerror="window.__scriptErrors.push('load failed: '+this.src)"></script>
-<script src="js/store.js?v=2026082702" onerror="window.__scriptErrors.push('load failed: '+this.src)"></script>
-<script src="js/matcher.js?v=2026082702" onerror="window.__scriptErrors.push('load failed: '+this.src)"></script>
-<script src="js/importer.js?v=2026082702" onerror="window.__scriptErrors.push('load failed: '+this.src)"></script>
-<script src="js/ocr.js?v=2026082702" onerror="window.__scriptErrors.push('load failed: '+this.src)"></script>
-<script src="js/exporter.js?v=2026082702" onerror="window.__scriptErrors.push('load failed: '+this.src)"></script>
-<script src="js/app.js?v=2026082702" onerror="window.__scriptErrors.push('load failed: '+this.src)"></script>
+<script src="vendor/exceljs.min.js?v=2026082703" onerror="window.__scriptErrors.push('load failed: '+this.src)"></script>
+<script src="js/utils.js?v=2026082703" onerror="window.__scriptErrors.push('load failed: '+this.src)"></script>
+<script src="js/store.js?v=2026082703" onerror="window.__scriptErrors.push('load failed: '+this.src)"></script>
+<script src="js/matcher.js?v=2026082703" onerror="window.__scriptErrors.push('load failed: '+this.src)"></script>
+<script src="js/importer.js?v=2026082703" onerror="window.__scriptErrors.push('load failed: '+this.src)"></script>
+<script src="js/ocr.js?v=2026082703" onerror="window.__scriptErrors.push('load failed: '+this.src)"></script>
+<script src="js/exporter.js?v=2026082703" onerror="window.__scriptErrors.push('load failed: '+this.src)"></script>
+<script src="js/app.js?v=2026082703" onerror="window.__scriptErrors.push('load failed: '+this.src)"></script>
 </body>
 </html>
