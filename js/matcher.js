@@ -112,14 +112,14 @@
 
       const nraw = U.normName(raw);
 
-      // b. 精确：直接采用商品库标准单价（用户规则：匹配成功优先复用数据库价）
+      // b. 精确：标准化名称，单价优先采用原图识别值（不再用商品库价覆盖清晰识别的单价）
       if (cat) {
         const hit = this.idx.byKey.get(cat + '|' + nraw);
-        if (hit) { out.name = hit.name; out.price = U.ok(hit.ref) ? hit.ref : price; out.score = 1; out.source = 'exact'; out.cat = hit.cat; return out; }
+        if (hit) { out.name = hit.name; out.price = U.ok(price) ? price : hit.ref; out.score = 1; out.source = 'exact'; out.cat = hit.cat; return out; }
       } else {
         for (const it of this.idx.all) {
           if (U.normName(it.name) === nraw) {
-            out.name = it.name; out.price = price; out.score = 1; out.source = 'exact'; out.cat = it.cat; return out;
+            out.name = it.name; out.price = U.ok(price) ? price : it.ref; out.score = 1; out.source = 'exact'; out.cat = it.cat; return out;
           }
         }
       }
@@ -127,7 +127,7 @@
       // c. 别名精确命中
       for (const it of pool) {
         if (it.alias && it.alias.some(a => U.normName(a) === nraw)) {
-          out.name = it.name; out.price = price; out.score = 1; out.source = 'alias'; out.cat = it.cat; return out;
+          out.name = it.name; out.price = U.ok(price) ? price : it.ref; out.score = 1; out.source = 'alias'; out.cat = it.cat; return out;
         }
       }
 
@@ -152,12 +152,12 @@
       });
 
       if (best && bs >= thAuto) {
-        out.name = best.name; out.price = U.ok(best.ref) ? best.ref : price; out.score = bs;
+        out.name = best.name; out.price = U.ok(price) ? price : best.ref; out.score = bs;
         out.source = bs >= 0.999 ? 'exact' : 'fuzzy'; out.cat = best.cat;
         return out;
       }
       if (best && bs >= thRev) {
-        out.name = best.name; out.price = U.ok(best.ref) ? best.ref : price; out.score = bs;
+        out.name = best.name; out.price = U.ok(price) ? price : best.ref; out.score = bs;
         out.source = 'fuzzy-low'; out.review = true; out.cat = best.cat;
         return out;
       }
@@ -170,9 +170,9 @@
      *
      * 核心原则：
      *   1. 金额（amount）以单据原图为准，最高优先级。
-     *   2. 品名匹配到商品库时，优先采用数据库标准单价；单价 ≥ 100 视为漏小数点。
+     *   2. 单价优先采用原图识别值；单价 ≥ 100 时原样保留，不再视为漏小数点。
      *   3. 数量由「金额 ÷ 单价」反推，并与 OCR 识别出的数量做合理性比对。
-     *   4. 三值齐全但不一致时，以金额和数据库单价为准修正，并标记待核对。
+     *   4. 三值齐全但不一致时，以金额和清晰单价为准修正，并标记待核对。
      */
     reconcile(qty, price, amount, refPrice, tol) {
       tol = tol || 0.02;
@@ -354,71 +354,14 @@
         if (row.cat && cfg.cats && cfg.cats.indexOf(row.cat) < 0) row.cat = '';
       }
 
-      // 品名匹配（匹配成功后优先复用数据库标准单价）
+      // 品名匹配（只标准化名称；单价优先采用原图识别值，不再用商品库价覆盖）
       const mn = this.matchName(row.name, row.cat, row.price, cfg);
       if (mn.name && mn.name !== row.name) row.name = mn.name;
       row.flags.nameSrc = mn.source;
       row.flags.score = U.r2(mn.score);
 
-      // ★ 大数/列错位修正（在 reconcile 之前）
-      // 餐饮采购单价几乎都在 1~50，≥100 视为漏小数点；数量≥100 视为列错位或也漏小数点。
       const fixNotes = [];
-
-      // 1. 单价 ≥ 100：漏小数点，优先用数据库价，否则除以 100
-      if (U.ok(rawPrice) && rawPrice >= 100) {
-        if (U.ok(mn.price)) {
-          row.price = mn.price;
-          fixNotes.push(`单价${U.fmt(rawPrice)}按商品库参考价修正为${U.fmt(mn.price)}`);
-        } else {
-          row.price = U.r4(rawPrice / 100);
-          fixNotes.push(`单价${U.fmt(rawPrice)}按漏小数点修正为${U.fmt(row.price)}`);
-        }
-        if (row.flags.derived.indexOf('price') < 0) row.flags.derived.push('price');
-        row.flags.review = true;
-      }
-
-      // 2. 数量 ≥ 100：大概率是金额/单价错位，或也漏小数点
-      if (U.ok(rawQty) && rawQty >= 100) {
-        if (U.ok(rawAmount) && rawAmount >= 100 && Math.abs(rawAmount - rawQty) / Math.max(rawQty, 1) < 0.05) {
-          // qty 列其实是金额，清空 qty 让 reconcile 用 amount/price 重算
-          row.qty = null;
-          fixNotes.push(`数量列识别为${U.fmt(rawQty)}，判定为金额错位，将按金额÷单价重算数量`);
-        } else {
-          row.qty = U.r4(rawQty / 100);
-          fixNotes.push(`数量${U.fmt(rawQty)}按漏小数点修正为${U.fmt(row.qty)}`);
-          if (row.flags.derived.indexOf('qty') < 0) row.flags.derived.push('qty');
-        }
-        row.flags.review = true;
-      }
-
-      // ★ 3. 异常标记：金额 ≈ 单价（OCR 把金额列误读成单价列的典型特征）
-      if (U.ok(row.price) && U.ok(row.amount) && row.price > 0 && row.price < 100) {
-        const ratio = row.amount / row.price;
-        if (ratio >= 0.98 && ratio <= 1.02) {
-          fixNotes.push(`金额${U.fmt(row.amount)}≈单价${U.fmt(row.price)}，疑似金额列读成单价列；请核对原单金额列`);
-          row.flags.review = true;
-        }
-      }
-
-      // ★ 4. 异常标记：金额精确等于 数量×单价（OCR 用自算填充金额列，没读原金额列）
-      if (U.ok(row.qty) && U.ok(row.price) && U.ok(row.amount) && row.qty > 0 && row.price > 0) {
-        const calcAmount = U.r2(row.qty * row.price);
-        if (Math.abs(row.amount - calcAmount) < 0.005 && row.amount > 0 && row.amount < 100) {
-          fixNotes.push(`金额${U.fmt(row.amount)}=数量×单价，疑似金额列被自算填充；请核对原单金额列`);
-          row.flags.review = true;
-        }
-      }
-
-      // ★ 6. 异常标记：金额 ≈ 单价²（OCR 把金额列误填成 price×qty 或列错位的典型特征）
-      if (U.ok(row.price) && U.ok(row.amount) && row.price > 0) {
-        const ratio = row.amount / row.price;
-        if (Math.abs(ratio - row.price) / Math.max(row.price, 0.01) < 0.08) {
-          fixNotes.push(`金额${U.fmt(row.amount)}≈单价²，疑似列错位；请核对原单金额列`);
-          row.flags.review = true;
-        }
-      }
-
-      // 反推（金额优先，单价采用原图识别值）
+      // 反推（金额优先，单价/数量均采用原图识别值；不再因为≥100做÷100修正）
       const rc = this.reconcile(row.qty, row.price, row.amount, mn.price, cfg.tol);
       row.qty = rc.qty; row.price = rc.price; row.amount = rc.amount;
       row.flags.derived = rc.derived;
