@@ -1,8 +1,8 @@
 /* ============================================================
  * exporter.js — 生成与原表一致的汇总 Excel
- *   固定表头：序号 日期 名称和规格 数量 单价 金额 合计
+ *   固定表头：序号 日期 商品名称 数量 单价 金额 合计
  *   宋体 14 / 行高 27 / 全边框 / 全部水平垂直居中 / 数字常规格式
- *   列宽：名称和规格 26（自动换行）· 合计 18 · 其余 13
+ *   列宽：商品名称 26（自动换行）· 合计 18 · 其余 13
  *   同日期：日期列与合计列合并单元格；合计列红字
  *   sheet 末尾小计行黄底红字；月度总帐汇总各分类
  * ============================================================ */
@@ -19,7 +19,7 @@
   const BORDER = { top: THIN, left: THIN, bottom: THIN, right: THIN };
   const CENTER = { horizontal: 'center', vertical: 'middle', wrapText: true };
 
-  const HEADERS = ['序号', '日期', '名称和规格', '数量', '单价', '金额', '合计'];
+  const HEADERS = ['序号', '日期', '商品名称', '数量', '单价', '金额', '合计'];
   const WIDTHS = [13, 13, 26, 13, 13, 13, 18];
   const DAILY_HEADERS = ['序号', '日期', '商品品种统计', '金额（元）'];
   const DAILY_WIDTHS = [13, 13, 26, 18];
@@ -216,7 +216,7 @@
   /* 待核对 */
   function buildReview(wb, ym, rows) {
     const ws = wb.addWorksheet('待核对' + ym);
-    const heads = ['序号', '日期', '分类', '名称和规格', '数量', '单价', '金额', '识别原文', '问题说明'];
+    const heads = ['序号', '日期', '分类', '商品名称', '数量', '单价', '金额', '识别原文', '问题说明'];
     setWidths(ws, [8, 12, 14, 26, 12, 12, 13, 22, 46]);
     ws.properties.defaultRowHeight = 27;
     heads.forEach((h, i) => {

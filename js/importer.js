@@ -308,11 +308,7 @@
             n++;
           } else {
             let nm = cleanName(str(cellVal(ws, r, col.name)));
-            const spec = (col.spec && col.spec !== col.name) ? cleanName(str(cellVal(ws, r, col.spec))) : '';
-            // 如果 name 列本身没有规格关键词，而 spec 列有，则合并
-            if (spec && nm && !/kg|g|斤|包|件|箱|ml|l/i.test(nm)) nm += ' ' + spec;
-            // 如果 name 列是空但 spec 列有内容，用 spec 兜底
-            if (!nm && spec) nm = spec;
+            // 商品规格列忽略，不合并到名称里；名称列空但 spec 列有内容时也不采用 spec。
             const qty = U.toNum(cellVal(ws, r, col.qty));
             const price = U.toNum(cellVal(ws, r, col.price));
             const amount = U.toNum(cellVal(ws, r, col.amount));
