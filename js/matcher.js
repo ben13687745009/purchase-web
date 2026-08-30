@@ -85,11 +85,11 @@
 
     /* ---------- 品名匹配 ----------
      * 返回 {name, price, score, source, review}
-     * 策略（保守，防张冠李戴）：
+     * 策略（2026-08-30）：以识别到的名称为准，商品库只作单价参考/名称校验，不覆盖清晰识别名。
      *  a. 品名为空 → 只有在同分类下单价唯一命中时才反查品名
-     *  b. 精确命中 → 直接用
-     *  c. fuzzy ≥ thAuto 自动纠正；thRev~thAuto 纠正但标待核对；< thRev 保留原名
-     *  d. 包含匹配要求长度比 ≥0.5 或前缀，防止"花生"→"花生酱"
+     *  b. 精确/别名/fuzzy 命中 → 只取商品库参考价/分类，不改名
+     *  c. fuzzy 命中但 < thAuto → 标待核对，不改名
+     *  d. 未命中 → 保留原名，标新品待核对
      */
     matchName(raw, cat, price, cfg) {
       const thAuto = cfg.thAuto, thRev = cfg.thRev;
@@ -112,22 +112,22 @@
 
       const nraw = U.normName(raw);
 
-      // b. 精确：标准化名称，单价优先采用原图识别值（不再用商品库价覆盖清晰识别的单价）
+      // b. 精确命中：不改识别到的名称，仅把商品库参考价/分类带回去作校验
       if (cat) {
         const hit = this.idx.byKey.get(cat + '|' + nraw);
-        if (hit) { out.name = hit.name; out.price = U.ok(price) ? price : hit.ref; out.score = 1; out.source = 'exact'; out.cat = hit.cat; return out; }
+        if (hit) { out.price = U.ok(price) ? price : hit.ref; out.score = 1; out.source = 'exact'; out.cat = hit.cat; return out; }
       } else {
         for (const it of this.idx.all) {
           if (U.normName(it.name) === nraw) {
-            out.name = it.name; out.price = U.ok(price) ? price : it.ref; out.score = 1; out.source = 'exact'; out.cat = it.cat; return out;
+            out.price = U.ok(price) ? price : it.ref; out.score = 1; out.source = 'exact'; out.cat = it.cat; return out;
           }
         }
       }
 
-      // c. 别名精确命中
+      // c. 别名精确命中：同样保留识别名称
       for (const it of pool) {
         if (it.alias && it.alias.some(a => U.normName(a) === nraw)) {
-          out.name = it.name; out.price = U.ok(price) ? price : it.ref; out.score = 1; out.source = 'alias'; out.cat = it.cat; return out;
+          out.price = U.ok(price) ? price : it.ref; out.score = 1; out.source = 'alias'; out.cat = it.cat; return out;
         }
       }
 
@@ -152,12 +152,12 @@
       });
 
       if (best && bs >= thAuto) {
-        out.name = best.name; out.price = U.ok(price) ? price : best.ref; out.score = bs;
+        out.price = U.ok(price) ? price : best.ref; out.score = bs;
         out.source = bs >= 0.999 ? 'exact' : 'fuzzy'; out.cat = best.cat;
         return out;
       }
       if (best && bs >= thRev) {
-        out.name = best.name; out.price = U.ok(price) ? price : best.ref; out.score = bs;
+        out.price = U.ok(price) ? price : best.ref; out.score = bs;
         out.source = 'fuzzy-low'; out.review = true; out.cat = best.cat;
         return out;
       }
@@ -166,13 +166,12 @@
       return out;
     },
 
-    /* ---------- 三缺一反推（金额优先 + 数据库单价优先）----------
+    /* ---------- 三缺一反推（识别原值优先 + 数据库补全兜底）----------
      *
-     * 核心原则：
-     *   1. 金额（amount）以单据原图为准，最高优先级。
-     *   2. 单价优先采用原图识别值；单价 ≥ 100 时原样保留，不再视为漏小数点。
-     *   3. 数量由「金额 ÷ 单价」反推，并与 OCR 识别出的数量做合理性比对。
-     *   4. 三值齐全但不一致时，以金额和清晰单价为准修正，并标记待核对。
+     * 核心原则（2026-08-30）：
+     *   1. 金额、单价、数量都以 OCR 识别到的原值为准，最高优先级。
+     *   2. 只有某一字段缺失或明显不合理时，才用其他字段/数据库参考价推算补全。
+     *   3. 三值齐全但不一致时，保留 OCR 识别原值，仅标记待核对；避免把 144.5 硬改成 144.5454 这类除法余数。
      */
     reconcile(qty, price, amount, refPrice, tol) {
       tol = tol || 0.02;
@@ -221,10 +220,10 @@
             review = true;
             note = (note ? note + '；' : '') + `金额${U.fmt(a)}÷单价${U.fmt(p)}=${U.fmt(calcQ)} 不合理，保留识别数量${U.fmt(q)}，请核对`;
           } else {
-            // 两者都合理但不一致：以金额÷单价为准修正
-            q = calcQ; derived.push('qty');
+            // 三值都识别到但不一致：以识别到的原值为准，仅标记待核对，
+            // 避免把 144.5 这种识别值硬改成 144.5454... 的除法余数。
             review = true;
-            note = (note ? note + '；' : '') + `识别数量${U.fmt(q)}与金额÷单价${U.fmt(calcQ)}不一致，已按金额修正`;
+            note = (note ? note + '；' : '') + `识别数量${U.fmt(q)}、金额${U.fmt(a)}、单价${U.fmt(p)}不一致（金额÷单价=${U.fmt(calcQ)}），已保留识别原值，请核对`;
           }
           return { qty: q, price: p, amount: a, derived, review, note };
         }
@@ -269,7 +268,7 @@
     },
 
     /* ---------- 辅助：判断数量是否像「合理的手写数量」----------
-     * 合理数量特征：整数、或 .0/.5 结尾的简单小数（如 1.5, 2.5, 0.5）
+     * 合理数量特征：整数、或最多一位小数（如 1.5, 2.5, 144.5, 0.5）
      * 不合理：47.6, 190.4, 95.9184, 57.1429, 5.7895（明显是除法余数）
      * 允许小浮点误差（如 1.0128 ≈ 1）
      */
@@ -277,30 +276,22 @@
       if (!U.ok(v) || v <= 0) return false;
       // 数量太小（< 0.1）永远不合理——采购单不会买 0.01 份东西
       if (v < 0.1) return false;
-      const rv = Math.round(v);
       // 整数（允许±0.05浮点误差）
-      if (Math.abs(v - rv) < 0.05) return true;
-      // .5 结尾的半数（允许±0.05误差）
-      if (v < 50 && Math.abs(v - Math.round(v * 2) / 2) < 0.05) return true;
-      // 一位小数且 >= 0.5（允许±0.05误差，用于 6.71≈7 这类情况）
-      if (v >= 0.5 && v < 10 && Math.abs(v - Math.round(v * 10) / 10) < 0.05) return true;
+      if (Math.abs(v - Math.round(v)) < 0.05) return true;
+      // 一位小数（含 .5 及 144.5 等称重数量）
+      if (Math.abs(v - Math.round(v * 10) / 10) < 0.05) return true;
       return false;
     },
 
-    /* ---------- 从名称末尾拆分单位 ---------- */
+    /* ---------- 单位处理 ----------
+     * 2026-08-30：不再从 name 末尾截断疑似单位字。单据「商品名称」列里的文字
+     *（包括 方包/牛角包/菠萝包/长方盒 的「包」「盒」）都应原样保留在 name 中。
+     * unit 只取 OCR 明确返回的单位列，没有就空着，避免误删商品名称尾字。
+     */
     _splitUnit(name, rawUnit) {
-      if (rawUnit) return { name: String(name || '').trim(), unit: U.normUnit(rawUnit) };
-      const units = ['箱','包','袋','盒','罐','瓶','支','件','个','份','套','条','只','扎','桶','升','斤','两','磅','kg','g','ml','l','千克','克','毫升','KG','ML','L'];
-      let n = String(name || '').trim();
-      let u = '';
-      for (const un of units) {
-        if (n.endsWith(un)) {
-          u = un;
-          n = n.slice(0, -un.length).trim();
-          break;
-        }
-      }
-      return { name: n, unit: U.normUnit(u) };
+      const n = String(name || '').trim();
+      if (rawUnit) return { name: n, unit: U.normUnit(rawUnit) };
+      return { name: n, unit: '' };
     },
 
     /* ---------- 单行完整处理 ---------- */
@@ -354,9 +345,8 @@
         if (row.cat && cfg.cats && cfg.cats.indexOf(row.cat) < 0) row.cat = '';
       }
 
-      // 品名匹配（只标准化名称；单价优先采用原图识别值，不再用商品库价覆盖）
+      // 品名匹配：以识别到的名称为准，不改名；商品库仅作单价参考/校验
       const mn = this.matchName(row.name, row.cat, row.price, cfg);
-      if (mn.name && mn.name !== row.name) row.name = mn.name;
       row.flags.nameSrc = mn.source;
       row.flags.score = U.r2(mn.score);
 
@@ -370,7 +360,7 @@
       // 不再做「分→元」或「单价≥100 强制÷100」相关兜底：金额与单价按原值保留，由用户在表格中核对。
 
       row.flags.review = mn.review || rc.review || row.flags.review;
-      if (nameUnit.unit) fixNotes.unshift(`单位「${nameUnit.unit}」已从名称拆分`);
+      if (nameUnit.unit) fixNotes.unshift(`识别单位：${nameUnit.unit}`);
       row.flags.note = [mn.review && mn.source === 'fuzzy-low' ? `品名近似匹配(${U.r2(mn.score)})，请确认` : '',
                         mn.source === 'new' ? '商品库中无此品名，可能是新品或识别有误' : '',
                         mn.source === 'db-price' ? '品名按历史单价反查得出，请确认' : '',
