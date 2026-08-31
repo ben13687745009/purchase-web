@@ -168,95 +168,76 @@
 
     /* ---------- 三缺一反推（识别原值优先 + 数据库补全兜底）----------
      *
-     * 核心原则（2026-08-30）：
+     * 核心原则（2026-08-31 最终版）：
      *   1. 金额、单价、数量都以 OCR 识别到的原值为准，最高优先级。
-     *   2. 只有某一字段缺失或明显不合理时，才用其他字段/数据库参考价推算补全。
-     *   3. 三值齐全但不一致时，保留 OCR 识别原值，仅标记待核对；避免把 144.5 硬改成 144.5454 这类除法余数。
+     *   2. 金额 ÷ 单价 = 数量 仅用于校验，绝不覆盖已经识别到的数量。
+     *   3. 校验差值在 0.02 ~ 1.0 之间视为正常手写/称重误差，保留识别值，不标 review。
+     *   4. 只有当数量缺失、为 0、或为非正数时，才用金额÷单价推算。
+     *   5. 三值齐全但不一致时，仍然保留 OCR 识别原值，仅标记待核对。
      */
     reconcile(qty, price, amount, refPrice, tol) {
       tol = tol || 0.02;
       const derived = [];
       let review = false, note = '';
       let q = qty, p = price, a = amount;
-      const hasQ = U.ok(q), hasP = U.ok(p), hasA = U.ok(a);
+      const hasQ = U.ok(q) && q > 0;
+      const hasP = U.ok(p) && p > 0;
+      const hasA = U.ok(a) && a > 0;
 
-      function isNiceQty(v) {
-        if (!U.ok(v) || v <= 0) return false;
-        if (v < 0.1) return false;
-        if (Math.abs(v - Math.round(v)) < 0.05) return true;
-        if (v < 50 && Math.abs(v - Math.round(v * 2) / 2) < 0.05) return true;
-        return false;
-      }
+      // 有金额 + 有单价：用金额÷单价做校验，但绝不改写 OCR 识别数量
+      if (hasA && hasP) {
+        const calcQ = U.r4(a / p);
+        const diff = hasQ ? Math.abs(q - calcQ) : Infinity;
+        // 用户规则：差值在 0.02 ~ 1.0 之间视为允许误差（称重/手写常见）
+        const tolRange = Math.max(0.02, Math.min(1.0, calcQ * 0.02));
 
-      // 单价优先采用原图识别值，不再因为 ≥100 就÷100，也不再因与商品库偏差>20% 强制改库价。
-      // 商品库参考价只在单价缺失或模糊时用于补全（见下方「有金额无单价」分支）。
-      if (U.ok(p) && p >= 100) {
-        // 保留原图大整数单价，仅在内部备注说明；不做任何自动修正
-        note = `单价${U.fmt(p)}为原图识别值，已原样保留`;
-      }
-
-      // ===== 有金额 =====
-      if (hasA) {
-        // 有金额+单价 → 以金额为准，用「金额 ÷ 单价」校验并修正数量
-        if (U.ok(p)) {
-          // 不再做「分→元」换算：OCR 识别到的金额原值直接保留。
-          const calcQ = U.r4(a / p);
-          const hasQR = U.ok(q);
-          const qOK = isNiceQty(q);
-          const calcOK = isNiceQty(calcQ);
-          const diff = hasQR ? Math.abs(q - calcQ) : 0;
-          const match = qOK && calcOK && diff <= Math.max(0.05, calcQ * 0.05);
-
-          if (match) {
-            // 识别数量与金额÷单价一致，直接保留，不标推算
-            note = (note ? note + '；' : '') + `金额÷单价=${U.fmt(calcQ)}，识别数量校验一致`;
-          } else if (!hasQR || !qOK) {
-            // 缺少数量或数量不合理：用金额÷单价推算
-            q = calcQ; derived.push('qty');
-            note = (note ? note + '；' : '') + '数量 = 金额 ÷ 单价';
-            if (!calcOK) review = true;
-          } else if (qOK && !calcOK) {
-            // 计算值不合理但 OCR 数量合理：保留 OCR 数量并标记
-            review = true;
-            note = (note ? note + '；' : '') + `金额${U.fmt(a)}÷单价${U.fmt(p)}=${U.fmt(calcQ)} 不合理，保留识别数量${U.fmt(q)}，请核对`;
+        if (hasQ) {
+          if (diff <= tolRange) {
+            // 校验通过：保留识别数量，不标 review
+            note = `金额÷单价=${U.fmt(calcQ)}，识别数量${U.fmt(q)}校验一致（差${U.fmt(diff)}）`;
           } else {
-            // 三值都识别到但不一致：以识别到的原值为准，仅标记待核对，
-            // 避免把 144.5 这种识别值硬改成 144.5454... 的除法余数。
+            // 校验不通过：仍然保留识别数量，仅标记待核对
             review = true;
-            note = (note ? note + '；' : '') + `识别数量${U.fmt(q)}、金额${U.fmt(a)}、单价${U.fmt(p)}不一致（金额÷单价=${U.fmt(calcQ)}），已保留识别原值，请核对`;
+            note = `识别数量${U.fmt(q)}与金额÷单价${U.fmt(calcQ)}偏差${U.fmt(diff)}，已保留识别原值，请核对`;
           }
-          return { qty: q, price: p, amount: a, derived, review, note };
+        } else {
+          // 数量缺失：才允许用金额÷单价推算
+          q = calcQ; derived.push('qty');
+          note = `数量缺失，按金额÷单价=${U.fmt(calcQ)}推算`;
+          if (Math.abs(calcQ - Math.round(calcQ)) > 0.05 && Math.abs(calcQ - Math.round(calcQ * 10) / 10) > 0.05) review = true;
         }
-        // 有金额无单价 → 用数据库价 或 金额÷数量
-        if (U.ok(refPrice)) {
+        return { qty: q, price: p, amount: a, derived, review, note };
+      }
+
+      // 有金额 + 无单价
+      if (hasA && !hasP) {
+        if (U.ok(refPrice) && refPrice > 0) {
           p = refPrice; derived.push('price');
           q = U.r4(a / p); derived.push('qty');
           note = '单价取自商品库(' + U.fmt(refPrice) + ')，数量=金额÷单价';
           review = true;
-          return { qty: q, price: p, amount: a, derived, review, note };
-        }
-        if (isNiceQty(q)) {
+        } else if (hasQ) {
           p = U.r4(a / q); derived.push('price');
           note = '单价 = 金额 ÷ 数量';
-          return { qty: q, price: p, amount: a, derived, review, note };
+        } else {
+          review = true; note = '仅有金额，缺少单价和数量，无法反推';
         }
-        review = true; note = '仅有金额，缺少单价和数量，无法反推';
         return { qty: q, price: p, amount: a, derived, review, note };
       }
 
-      // ===== 无金额 =====
+      // 无金额
       if (!hasA) {
-        if (U.ok(q) && U.ok(p)) {
+        if (hasQ && hasP) {
           a = U.r2(q * p); derived.push('amount');
           note = '金额 = 数量 × 单价（无原始金额，计算得出）';
-        } else if (U.ok(q) && U.ok(refPrice)) {
+        } else if (hasQ && U.ok(refPrice) && refPrice > 0) {
           p = refPrice; derived.push('price');
           a = U.r2(q * p); derived.push('amount');
           note = '单价取自商品库，金额 = 数量 × 单价';
           review = true;
-        } else if (U.ok(p)) {
+        } else if (hasP) {
           review = true; note = '仅有单价，缺少数量和金额';
-        } else if (U.ok(q)) {
+        } else if (hasQ) {
           review = true; note = '仅有数量，缺少单价和金额';
         } else {
           review = true; note = '数量/单价/金额均未识别';

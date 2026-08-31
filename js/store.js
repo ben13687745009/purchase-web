@@ -11,7 +11,7 @@
   const DB_VER = 1;
   let db = null;
 
-  const DEFAULT_CATS = ['环绿蔬菜', '面包', '粮油', '鲜肉', '裕笙隆', '汁水', '茶粉', '包装品', '创银'];
+  const DEFAULT_CATS = ['环绿蔬菜', '面包', '粮油', '鲜肉', '裕笙隆', '汁水', '茶粉', '包装品', '创银', '三鸟'];
 
   const DEFAULT_CFG = {
     api: { preset: '', base: '', model: '', key: '', conc: 2, maxw: 1800, proxy: '', mobileModel: '', desktopEnhance: false },
@@ -77,7 +77,46 @@
       await open();
       const saved = await this.kvGet('cfg');
       if (saved) this.cfg = Object.assign({}, DEFAULT_CFG, saved, { api: Object.assign({}, DEFAULT_CFG.api, saved.api || {}) });
+      // 分类名迁移：三鸡 → 三鸟
+      await this.migrateCatName('三鸡', '三鸟');
       return this.cfg;
+    },
+
+    /* ---------- 分类名迁移 ----------
+     * 把 cfg.cats、items.cat、books.rows.cat 里的旧分类名批量替换为新名。
+     */
+    async migrateCatName(oldName, newName) {
+      let cfgDirty = false;
+      const cats = this.cfg.cats || [];
+      if (cats.indexOf(oldName) >= 0) {
+        this.cfg.cats = cats.map(c => c === oldName ? newName : c);
+        cfgDirty = true;
+      }
+      // 如果列表里没有新名，加到末尾
+      if (this.cfg.cats.indexOf(newName) < 0) {
+        this.cfg.cats.push(newName);
+        cfgDirty = true;
+      }
+
+      const items = await this.allItems();
+      let itemsDirty = false;
+      items.forEach(it => {
+        if (it.cat === oldName) { it.cat = newName; itemsDirty = true; }
+      });
+
+      const books = await this.allBooks();
+      let booksDirtyCount = 0;
+      for (const b of books) {
+        let dirty = false;
+        (b.rows || []).forEach(r => {
+          if (r.cat === oldName) { r.cat = newName; dirty = true; }
+        });
+        if (dirty) { await this.putBook(b); booksDirtyCount++; }
+      }
+
+      if (itemsDirty) await this.putItems(items);
+      if (cfgDirty) await this.saveCfg();
+      return { cfgDirty, itemsDirty, booksDirtyCount };
     },
     async saveCfg() { await this.kvSet('cfg', this.cfg); },
 
