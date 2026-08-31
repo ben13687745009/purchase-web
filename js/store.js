@@ -87,14 +87,21 @@
      */
     async migrateCatName(oldName, newName) {
       let cfgDirty = false;
-      const cats = this.cfg.cats || [];
-      if (cats.indexOf(oldName) >= 0) {
-        this.cfg.cats = cats.map(c => c === oldName ? newName : c);
-        cfgDirty = true;
-      }
-      // 如果列表里没有新名，加到末尾
-      if (this.cfg.cats.indexOf(newName) < 0) {
-        this.cfg.cats.push(newName);
+      const raw = (this.cfg.cats || []).slice();
+      // 1) 旧名 → 新名
+      const mapped = raw.map(c => (c === oldName ? newName : c));
+      // 2) 去重（保留首次出现）—— 例如「三鸡」被替换后会与已手动添加的「三鸟」重名
+      const seen = new Set();
+      const dedup = mapped.filter(c => {
+        if (!c || seen.has(c)) return false;
+        seen.add(c);
+        return true;
+      });
+      // 3) 若仍无新名，则补到末尾
+      if (dedup.indexOf(newName) < 0) dedup.push(newName);
+
+      if (JSON.stringify(dedup) !== JSON.stringify(raw)) {
+        this.cfg.cats = dedup;
         cfgDirty = true;
       }
 
