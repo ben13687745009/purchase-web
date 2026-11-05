@@ -2,7 +2,7 @@
  * exporter.js — 生成与原表一致的汇总 Excel
  *   固定表头：序号 日期 商品名称 数量 单价 金额 合计
  *   宋体 14 / 行高 27 / 全边框 / 全部水平垂直居中 / 数字常规格式
- *   列宽：商品名称 26（自动换行）· 合计 18 · 其余 13
+ *   列宽：商品名称 26（自动换行）· 合计 18 · 其余 13（裕笙隆/创银商品名称列宽 30）
  *   同日期：日期列与合计列合并单元格；合计列红字
  *   sheet 末尾小计行黄底红字；月度总帐汇总各分类
  * ============================================================ */
@@ -42,9 +42,11 @@
   }
 
   /* 明细 sheet */
-  function buildDetail(wb, sheetName, rows, ym, opt) {
+  function buildDetail(wb, sheetName, rows, ym, opt, cat) {
     const ws = wb.addWorksheet(sheetName, { views: [{ state: 'frozen', ySplit: 1 }] });
     setWidths(ws, WIDTHS);
+    // 裕笙隆 / 创银 商品名称（第3列）加宽到 30，避免长名称换行挤占
+    if (cat === '裕笙隆' || cat === '创银') ws.getColumn(3).width = 30;
     ws.properties.defaultRowHeight = 27;
 
     // 表头
@@ -74,10 +76,12 @@
     const dayRanges = [];
     groups.forEach(gp => {
       const start = r;
-      gp.rows.forEach(row => {
+      gp.rows.forEach((row, i) => {
         ws.getRow(r).height = 27;
         const a = ws.getCell(r, 1); a.value = no++; styleCell(a);
-        const b = ws.getCell(r, 2); b.value = row.date || ''; styleCell(b);
+        // 日期只在每天第一行写值，其余留空；配合下方合并单元格，
+        // 即使查看器不渲染合并（如网页版表格）也不会出现重复日期
+        const b = ws.getCell(r, 2); b.value = i === 0 ? (row.date || '') : null; styleCell(b);
         const c = ws.getCell(r, 3); c.value = row.name || ''; styleCell(c);
         const d = ws.getCell(r, 4); d.value = U.ok(row.qty) ? row.qty : null; styleCell(d);
         const e = ws.getCell(r, 5); e.value = U.ok(row.price) ? row.price : null; styleCell(e);
@@ -280,7 +284,7 @@
       sheetsInfo.forEach(si => {
         const res = si.isDaily
           ? buildDaily(wb, si.sheetName, si.sub, ym)
-          : buildDetail(wb, si.sheetName, si.sub, ym, opt);
+          : buildDetail(wb, si.sheetName, si.sub, ym, opt, si.cat);
         parts.push({
           name: si.cat, sheet: si.sheetName, total: res.total,
           totalRef: (si.isDaily ? 'D' : 'G') + res.totalRow
