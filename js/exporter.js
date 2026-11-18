@@ -4,7 +4,7 @@
  *   宋体 14 / 行高 27 / 全边框 / 全部水平垂直居中 / 数字常规格式
  *   列宽：商品名称 26（自动换行）· 合计 18 · 其余 13（裕笙隆/创银商品名称列宽 30）
  *   同日期：日期列与合计列合并单元格；合计列红字
- *   sheet 末尾小计行黄底红字；月度总帐汇总各分类
+ *   底行仅「合计/统计标签格 + 总额数值格」两格黄底红字，其余格保留边框不标黄；月度总帐汇总各分类
  * ============================================================ */
 (function (g) {
   'use strict';
@@ -112,11 +112,13 @@
       });
     }
 
-    // 小计行
+    // 底行合计：仅「金额列(6) + 合计列(7)」两格黄底红字，其余格只保留边框不标黄
     const last = r - 1;
     ws.getRow(r).height = 27;
-    for (let c = 1; c <= 7; c++) styleCell(ws.getCell(r, c), { fill: YELLOW, red: true, bold: true });
+    for (let c = 1; c <= 7; c++) styleCell(ws.getCell(r, c));
     ws.getCell(r, 6).value = ym + '合计';
+    styleCell(ws.getCell(r, 6), { fill: YELLOW, red: true, bold: true });
+    styleCell(ws.getCell(r, 7), { fill: YELLOW, red: true, bold: true });
     const total = sorted.reduce((s, x) => s + (U.ok(x.amount) ? x.amount : 0), 0);
       ws.getCell(r, 7).value = last >= 2
         ? { formula: `SUM(G2:G${last})`, result: U.r2(total) }
@@ -160,7 +162,10 @@
       r++;
     });
     ws.getRow(r).height = 27;
-    for (let c = 1; c <= 4; c++) styleCell(ws.getCell(r, c), { fill: YELLOW, red: true, bold: true });
+    for (let c = 1; c <= 4; c++) styleCell(ws.getCell(r, c));
+    // 底行仅「标签格(3) + 金额格(4)」两格黄底红字
+    styleCell(ws.getCell(r, 3), { fill: YELLOW, red: true, bold: true });
+    styleCell(ws.getCell(r, 4), { fill: YELLOW, red: true, bold: true });
     ws.getCell(r, 3).value = ym + '合计';
     ws.getCell(r, 4).value = r > 2 ? { formula: `SUM(D2:D${r - 1})`, result: U.r2(total) } : U.r2(total);
     return { ws, total: U.r2(total), rowCount: days.length, totalRow: r };
@@ -310,7 +315,10 @@
         lr++;
       });
       ledger.getRow(lr).height = 27;
-      for (let c = 1; c <= 4; c++) styleCell(ledger.getCell(lr, c), { fill: YELLOW, red: true, bold: true });
+      for (let c = 1; c <= 4; c++) styleCell(ledger.getCell(lr, c));
+      // 底行仅「金额格(3) + 统计格(4)」两格黄底红字
+      styleCell(ledger.getCell(lr, 3), { fill: YELLOW, red: true, bold: true });
+      styleCell(ledger.getCell(lr, 4), { fill: YELLOW, red: true, bold: true });
       ledger.getCell(lr, 3).value = lr > 2 ? { formula: `SUM(C2:C${lr - 1})`, result: U.r2(total) } : U.r2(total);
       ledger.getCell(lr, 4).value = '统计';
       lr += 2;
